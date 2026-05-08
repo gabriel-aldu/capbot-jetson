@@ -5,12 +5,12 @@ gestiona el video de la cámara IMX219 y coordina heartbeats/paros de emergencia
 
 ```
                     UDP 5005 (comandos)            Serial COBS+CRC16
-    ┌──────────┐ ──────────────────────▶ ┌────────┐ ────────────▶ ┌───────┐
-    │ PC Host  │ ◀────────────────────── │ Jetson │ ◀──────────── │ ESP32 │
+    ┌──────────┐ ─────────────────────> ┌────────┐ ────────────> ┌───────┐
+    │ PC Host  │ <────────────────────── │ Jetson │ <──────────── │ ESP32 │
     │          │    UDP 5006 (ACKs)      │        │   telemetría  │       │
-    │          │ ◀────────────────────── │        │               └───────┘
+    │          │ <────────────────────── │        │               └───────┘
     │          │   WS 8765 (telemetría)  │        │
-    │          │ ◀────────────────────── │        │
+    │          │ <────────────────────── │        │
     │          │   UDP 5000 (video H264) │        │
     └──────────┘                         └────────┘
 ```
@@ -35,7 +35,6 @@ jetson_service/
 ├── hw/
 │   └── esp32_link.py       # Serial bidireccional con ESP32
 └── scripts/
-    ├── install.sh          # systemd + chrony/ntp
     └── jetson-service.service
 ```
 
@@ -49,12 +48,6 @@ jetson_service/
 ## Ejecución manual
 
 ```bash
-python3 main.py --host 0.0.0.0 --serial /dev/ttyUSB0 --host-ip 192.168.1.10
+python3 main.py
 ```
 
-## Como servicio systemd
-
-```bash
-sudo ./scripts/install.sh 192.168.1.10
-sudo systemctl status jetson-service
-```

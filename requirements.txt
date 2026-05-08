@@ -1,6 +1,6 @@
 # Dependencias del servicio Jetson — pinned para Python 3.6
 #
-# NOTA IMPORTANTE: Python 3.6 llegó a EOL el 2021-12-23. Estas versiones son
+# NOTA: Python 3.6 llegó a EOL el 2021-12-23. Estas versiones son
 # las últimas que soportan 3.6. Instalar con:
 #   pip install -r requirements.txt
 
