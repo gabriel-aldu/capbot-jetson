@@ -231,6 +231,7 @@ class Esp32Link:
         try:
             import json
             data = json.loads(payload.decode("utf-8"))
+            print(f"📥 Received from ESP32: {data}")
             if not isinstance(data, dict):
                 return
         except (UnicodeDecodeError, ValueError):
@@ -252,6 +253,7 @@ class Esp32Link:
             if self._ser is None or not self._ser.is_open:
                 continue
             try:
+                print(f"📤 Sending to ESP32: {pkt}")
                 await loop.run_in_executor(None, self._ser.write, pkt)
             except (OSError, serial.SerialException) as exc:
                 log.warning("Error escribiendo serial: %s", exc)
