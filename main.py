@@ -42,7 +42,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     p.add_argument("--host-ip", default="",
                    help="IP del PC host (si se omite, se auto-detecta desde UDP)")
     p.add_argument("--serial", default=CFG.serial.port,
-                   help="Puerto serial del ESP32 (default: /dev/ttyUSB0)")
+                   help="Puerto serial del ESP32 (default: /dev/ttyTHS1)")
     p.add_argument("--baud", type=int, default=CFG.serial.baudrate,
                    help="Baudrate del serial (default: 921600)")
     p.add_argument("--hb-timeout-ms", type=int, default=CFG.network.host_heartbeat_timeout_ms,
