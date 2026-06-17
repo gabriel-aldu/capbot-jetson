@@ -34,6 +34,9 @@ from protocol.cobs_frame import (
     build_brake,
     build_heartbeat,
     build_motor,
+    build_pid_param,
+    build_setpoint_comp,
+    build_mode_cmd,
 )
 
 log = logging.getLogger(__name__)
@@ -99,6 +102,9 @@ class Esp32Link:
     def _subscribe_bus(self) -> None:
         bus.on(Ev.CMD_MOTOR, self._on_motor_cmd)
         bus.on(Ev.STOP_MOTORS, self._on_stop_motors)
+        bus.on(Ev.CMD_PID_PARAM, self._on_pid_param)
+        bus.on(Ev.CMD_SETPOINT, self._on_setpoint)
+        bus.on(Ev.CMD_MODE, self._on_mode)
 
     def _on_motor_cmd(self, data: dict) -> None:
         # Si hay emergencia activa o host offline, ignorar comandos de motor.
@@ -107,10 +113,30 @@ class Esp32Link:
         self._tx_queue.put_nowait(build_motor(data["left"], data["right"], data["aux"]))
 
     def _on_stop_motors(self, _data) -> None:
-        # Freno activo
         try:
             self._tx_queue.put_nowait(build_brake())
         except asyncio.QueueFull:
+            pass
+
+    def _on_pid_param(self, data: dict) -> None:
+        try:
+            pkt = build_pid_param(data["ctrl_id"], data["param_id"], data["value"])
+            self._tx_queue.put_nowait(pkt)
+        except (KeyError, asyncio.QueueFull):
+            pass
+
+    def _on_setpoint(self, data: dict) -> None:
+        try:
+            pkt = build_setpoint_comp(data["comp_id"], data["value"])
+            self._tx_queue.put_nowait(pkt)
+        except (KeyError, asyncio.QueueFull):
+            pass
+
+    def _on_mode(self, data: dict) -> None:
+        try:
+            pkt = build_mode_cmd(data["mode"])
+            self._tx_queue.put_nowait(pkt)
+        except (KeyError, asyncio.QueueFull):
             pass
 
     # --------------------------------------------------------
