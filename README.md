@@ -34,6 +34,7 @@ jetson_service/
 │   └── video_pipeline.py   # GStreamer IMX219 → H264 HW → UDP
 ├── hw/
 │   └── esp32_link.py       # Serial bidireccional con ESP32
+├── ros_bridge.py           # Tópicos ROS2 from_bridge/to_bridge <-> bus
 └── scripts/
     └── jetson-service.service
 ```

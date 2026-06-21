@@ -29,6 +29,7 @@ from hw.esp32_link import Esp32Link
 from net.udp_server import run_udp_server
 from net.video_pipeline import run_video_pipeline
 from net.ws_server import run_ws_server
+from ros_bridge import run_ros_bridge
 
 log = logging.getLogger("jetson_service")
 
@@ -90,6 +91,7 @@ async def amain(stop_event: asyncio.Event, loop: asyncio.AbstractEventLoop) -> N
         ("video",         run_video_pipeline(stop_event, loop)),
         ("esp32",         esp32.run(stop_event)),
         ("host-watchdog", run_host_watchdog()),
+        ("ros",           run_ros_bridge(stop_event, loop)),
     ]
     # PY36: `loop.create_task` existe desde 3.4.2, así que es seguro en 3.6.
     tasks = [loop.create_task(coro) for _, coro in task_specs]
