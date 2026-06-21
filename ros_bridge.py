@@ -13,9 +13,11 @@ propio):
         (Ev.CMD_SETPOINT, comp_id 0/1/2). Se mantiene en memoria porque el
         host manda un componente por mensaje, no los tres juntos.
 
-  to_bridge    (suscribe)  [left, right, stop]
-      - left, right: consigna de velocidad por rueda -> Ev.CMD_MOTOR.
-      - stop: != 0 frena ya (Ev.STOP_MOTORS) e ignora left/right.
+  to_bridge    (suscribe)  [linear, angular, stop]
+      - linear, angular: consigna de velocidad (m/s, rad/s) -> Ev.CMD_VEL,
+        que viaja al ESP32 como frame serial VEL_CMD (0x16, <ff>). El
+        firmware hace la cinemática diferencial, no el bridge.
+      - stop: != 0 frena ya (Ev.STOP_MOTORS) e ignora linear/angular.
 
 rclpy no comparte el loop de asyncio de main.py, así que este nodo spinea
 en un hilo dedicado (vía run_in_executor). Dirección bus->ROS corre en el
@@ -88,15 +90,15 @@ class RosBridge(Node):
     # -------------------- ROS -> bus --------------------
     def _on_to_bridge(self, msg) -> None:
         if len(msg.data) < 3:
-            self.get_logger().warn('to_bridge: se esperaban 3 valores [left, right, stop]')
+            self.get_logger().warn('to_bridge: se esperaban 3 valores [linear, angular, stop]')
             return
-        left, right, stop = msg.data[0], msg.data[1], msg.data[2]
+        linear, angular, stop = msg.data[0], msg.data[1], msg.data[2]
 
         if stop != 0.0:
             self._loop.call_soon_threadsafe(bus.emit, Ev.STOP_MOTORS, None)
         else:
-            payload = {"left": int(left), "right": int(right), "aux": 0, "seq": 0}
-            self._loop.call_soon_threadsafe(bus.emit, Ev.CMD_MOTOR, payload)
+            payload = {"linear": float(linear), "angular": float(angular), "seq": 0}
+            self._loop.call_soon_threadsafe(bus.emit, Ev.CMD_VEL, payload)
 
 
 def _spin_until_stopped(node: "RosBridge", stop_event: asyncio.Event) -> None:

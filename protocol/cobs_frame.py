@@ -13,6 +13,7 @@ Tipos de mensaje propuestos (ajustar con firmware del ESP32):
     0x10  MOTOR_CMD   payload = <hhh> (left, right, aux)
     0x11  BRAKE_ON    payload vacío (freno activo)
     0x12  HEARTBEAT   payload vacío
+    0x16  VEL_CMD     payload = <ff> (linear, angular)
     0x20  TELEMETRY   payload = JSON UTF-8 o struct binario (a definir)
     0x21  ESP_HELLO   payload vacío (el ESP32 saluda al arrancar)
 
@@ -40,6 +41,7 @@ class SerMsgType(IntEnum):
     PID_PARAM = 0x13      # ctrl_id(1) param_id(1) float32(4)
     SETPOINT_COMP = 0x14  # comp_id(1) reserved(1) float32(4)
     MODE_CMD = 0x15       # mode(1)
+    VEL_CMD = 0x16        # linear(float32) angular(float32)
     TELEMETRY = 0x20
     ESP_HELLO = 0x21
 
@@ -184,3 +186,8 @@ def build_setpoint_comp(comp_id: int, value: float) -> bytes:
 def build_mode_cmd(mode: int) -> bytes:
     payload = struct.pack("<B", mode & 0xFF)
     return SerFrame(SerMsgType.MODE_CMD, payload).pack()
+
+
+def build_vel_cmd(linear: float, angular: float) -> bytes:
+    payload = struct.pack("<ff", linear, angular)
+    return SerFrame(SerMsgType.VEL_CMD, payload).pack()

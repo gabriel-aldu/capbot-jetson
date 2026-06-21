@@ -74,6 +74,7 @@ bus = EventBus()
 class Ev:
     # Desde UDP server (host -> jetson)
     CMD_MOTOR = "cmd.motor"              # dict {left, right, aux, seq}
+    CMD_VEL = "cmd.vel"                  # dict {linear, angular, seq}
     CMD_HEARTBEAT = "cmd.heartbeat"      # dict {seq}
     CMD_EMERGENCY = "cmd.emergency"      # dict {seq}
     CMD_PID_PARAM = "cmd.pid_param"      # dict {ctrl_id, param_id, value, seq}

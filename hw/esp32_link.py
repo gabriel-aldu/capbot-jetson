@@ -37,6 +37,7 @@ from protocol.cobs_frame import (
     build_pid_param,
     build_setpoint_comp,
     build_mode_cmd,
+    build_vel_cmd,
 )
 
 log = logging.getLogger(__name__)
@@ -101,6 +102,7 @@ class Esp32Link:
     # --------------------------------------------------------
     def _subscribe_bus(self) -> None:
         bus.on(Ev.CMD_MOTOR, self._on_motor_cmd)
+        bus.on(Ev.CMD_VEL, self._on_vel_cmd)
         bus.on(Ev.STOP_MOTORS, self._on_stop_motors)
         bus.on(Ev.CMD_PID_PARAM, self._on_pid_param)
         bus.on(Ev.CMD_SETPOINT, self._on_setpoint)
@@ -111,6 +113,19 @@ class Esp32Link:
         if state.emergency_active:
             return
         self._tx_queue.put_nowait(build_motor(data["left"], data["right"], data["aux"]))
+
+    def _on_vel_cmd(self, data: dict) -> None:
+        # Mismo gate que _on_motor_cmd: en emergencia u host offline, ignorar.
+        if state.emergency_active:
+            return
+        try:
+            pkt = build_vel_cmd(data["linear"], data["angular"])
+        except KeyError:
+            return
+        try:
+            self._tx_queue.put_nowait(pkt)
+        except asyncio.QueueFull:
+            pass
 
     def _on_stop_motors(self, _data) -> None:
         try:
