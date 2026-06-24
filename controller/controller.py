@@ -1,7 +1,18 @@
-import pygame
-import time
-from sim import RobotEnvironment, OFFSET, CELL_SIZE, PIXELS_PER_CM
+import asyncio
+import logging
 import math
+
+from core.bus import Ev, bus
+from controller.a_star import astar, get_path_with_directions, maze as MAZE
+from protocol.udp_frame import SETPOINT_X_POS, SETPOINT_Y_POS
+
+log = logging.getLogger(__name__)
+
+# El host fija la meta por UDP (Ev.CMD_SETPOINT): x -> fila, y -> columna.
+# Hasta que llegue el primer setpoint, usamos esta celda como meta inicial.
+_DEFAULT_START_CELL = (5, 2)
+_DEFAULT_GOAL_CELL = (0, 0)
+
 
 def get_line_path(steps, steps_per_cell=30):
     if not steps:
@@ -53,60 +64,54 @@ class HighLevelControl:
         heading_error = angle_to_target - robot_theta
         heading_error = math.atan2(math.sin(heading_error), math.cos(heading_error))
 
-        kp_angular = 3.0
-        angular_vel_cmd = kp_angular * heading_error
+        
+        angular_pos_cmd = angle_to_target
 
         final_x, final_y, _ = self.path[-1]
         dist_to_goal = math.hypot(final_x - robot_x_cm, final_y - robot_y_cm)
 
         if dist_to_goal < 4.0:
             linear_vel_cmd = 0.0
-            angular_vel_cmd = 0.0
+            angular_pos_cmd = 0.0
         else:
             linear_vel_cmd = max(0.1, 1.0 - (abs(heading_error) / (math.pi / 2)))
 
-        return linear_vel_cmd, angular_vel_cmd
+        return linear_vel_cmd, angular_pos_cmd
 
 
-def main():
-    env = RobotEnvironment(start_cell=(5,2), goal_cell=(0, 0))
-    print("Environment running with autonomous HighLevelControl.")
-    
-    # 1. Generate line path
-    astar_path = env.get_path()
-    line_path = get_line_path(astar_path, steps_per_cell=40)
-    
-    # 2. Give the path to the environment to draw it correctly
-    env.set_continuous_path(line_path)
-    
-    controller = HighLevelControl(line_path, lookahead_dist=14.0)
+async def run_controller(stop_event: asyncio.Event) -> None:
+    """Sigue el path A* con odometria del ESP32 y emite Ev.CMD_VEL.
 
-    running = True
-    while running:
-        state = env.get_state()
-        
-        robot_x_cm = (state["x"] - (OFFSET + 0.5 * CELL_SIZE)) / PIXELS_PER_CM
-        robot_y_cm = (state["y"] - (OFFSET + 0.5 * CELL_SIZE)) / PIXELS_PER_CM
-        robot_theta = state["theta"]
+    Reemplaza al puente ROS2 (ros_bridge.py, removido): antes un nodo ROS
+    corria HighLevelControl y publicaba el resultado a 'to_bridge'; ahora
+    corre directo en el loop asyncio del servicio y el resultado va al bus,
+    desde donde hw.esp32_link lo manda al ESP32 como frame VEL_CMD.
+    """
+    cells = astar(MAZE, _DEFAULT_START_CELL, _DEFAULT_GOAL_CELL)
+    path = get_line_path(get_path_with_directions(cells), steps_per_cell=40)
+    hlc = HighLevelControl(path, lookahead_dist=14.0)
+    seq = 0
 
-        linear_vel, angular_vel = controller.get_control(robot_x_cm, robot_y_cm, robot_theta)
+    def _on_telemetry(data) -> None:
+        nonlocal seq
+        if not isinstance(data, dict):
+            return
+        odo = data.get("odo")
+        if not isinstance(odo, dict):
+            return
+        try:
+            x_cm = float(odo.get("x", 0.0))
+            y_cm = float(odo.get("y", 0.0))
+            theta = float(odo.get("a", 0.0))
+        except (TypeError, ValueError):
+            return
 
-        target_linear = max(-1.0, min(1.0, linear_vel))
-        target_angular = max(-1.0, min(1.0, angular_vel))
-        
-        action = (target_linear, target_angular)
-        
-        next_state, done = env.step(action)
+        linear_vel_cmd, angular_pos_cmd = hlc.get_control(x_cm, y_cm, theta)
+        seq += 1
+        bus.emit(Ev.CMD_VEL, {"linear": linear_vel_cmd, "angular": angular_pos_cmd, "seq": seq})
 
-        if done:
-            print("Goal Reached! Resetting...")
-            time.sleep(1)
-            env.reset()
-            controller.reset()
-
-        env.render()
-
-    env.close()
-
-if __name__ == "__main__":
-    main()
+    bus.on(Ev.TELEMETRY, _on_telemetry)
+    try:
+        await stop_event.wait()
+    finally:
+        bus.off(Ev.TELEMETRY, _on_telemetry)

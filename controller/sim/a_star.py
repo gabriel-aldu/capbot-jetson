@@ -1,4 +1,5 @@
 import heapq
+import matplotlib.pyplot as plt
 
 #(up,down,left,right)
 # 1. Your complete 5x5 labyrinth map
@@ -87,4 +88,67 @@ def get_path_with_directions(path):
         directed_path.append((path[i], direction))
         
     return directed_path
+
+# 3. Matplotlib Rendering Function
+def draw_maze(maze, path=None, start=(0,0), end=(4,1)):
+    rows = len(maze)
+    cols = len(maze[0])
+    
+    fig, ax = plt.subplots(figsize=(6, 6))
+    
+    # Draw walls based on cell configuration
+    # Grid coordinates mapping: 
+    # row index increases DOWN (y axis needs to be inverted or carefully planned)
+    # We will treat row as Y (going down) and col as X (going right)
+    for r in range(rows):
+        for c in range(cols):
+            cell_walls = maze[r][c]
+            
+            # Boundaries of the current cell square
+            x_left, x_right = c, c + 1
+            y_top, y_bottom = rows - r, rows - (r + 1)
+            
+            # UP Wall (index 0)
+            if cell_walls[0]:
+                ax.plot([x_left, x_right], [y_top, y_top], color='red', linewidth=3)
+            # DOWN Wall (index 1)
+            if cell_walls[1]:
+                ax.plot([x_left, x_right], [y_bottom, y_bottom], color='red', linewidth=3)
+            # LEFT Wall (index 2)
+            if cell_walls[2]:
+                ax.plot([x_left, x_left], [y_top, y_bottom], color='red', linewidth=3)
+            # RIGHT Wall (index 3)
+            if cell_walls[3]:
+                ax.plot([x_right, x_right], [y_top, y_bottom], color='red', linewidth=3)
+                
+    # Mark Start and End positions (placing markers in the center of the cell)
+    ax.plot(start[1] + 0.5, rows - start[0] - 0.5, 'go', markersize=12, label='Start')
+    ax.plot(end[1] + 0.5, rows - end[0] - 0.5, 'ro', markersize=12, label='Goal')
+
+    # Draw the Path if found
+    if path:
+        path_x = [c + 0.5 for (r, c) in path]
+        path_y = [rows - r - 0.5 for (r, c) in path]
+        ax.plot(path_x, path_y, color='blue', linewidth=4, linestyle='-', label='A* Path')
+
+    # Formatting the plot
+    ax.set_xlim(-0.5, cols + 0.5)
+    ax.set_ylim(-0.5, rows + 0.5)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    plt.title("Labyrinth Map with A* Calculated Path", fontsize=14, fontweight='bold')
+    plt.legend(loc='upper right')
+    plt.show()
+
+if __name__ == "__main__":
+    # --- Execution ---
+    start_pos = (5, 2)
+    goal_pos = (0, 0)
+    calculated_path = astar(maze, start_pos, goal_pos)
+
+    draw_maze(maze, path=calculated_path, start=start_pos, end=goal_pos)
+
+    final_path_with_directions = get_path_with_directions(calculated_path)
+    for step in final_path_with_directions:
+        print(f"Cell: {step[0]} -> Headed: {step[1].upper()}")
 
