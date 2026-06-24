@@ -82,10 +82,16 @@ class UdpCommandServer(asyncio.DatagramProtocol):
         elif frame.msg_type == MsgType.CMD_HEARTBEAT:
             bus.emit(Ev.CMD_HEARTBEAT, {"seq": frame.seq})
         elif frame.msg_type == MsgType.CMD_EMERGENCY:
-            state.emergency_active = True
-            bus.emit(Ev.CMD_EMERGENCY, {"seq": frame.seq})
-            bus.emit(Ev.STOP_MOTORS, None)
-            log.warning("PARO DE EMERGENCIA recibido (seq=%d)", frame.seq)
+            # Toggle: como un botón de emergencia físico, un segundo CMD_EMERGENCY
+            # libera el freno. Sin esto, `emergency_active` quedaba en True para
+            # siempre y el ESP32 dejaba de recibir comandos de motor/velocidad.
+            state.emergency_active = not state.emergency_active
+            bus.emit(Ev.CMD_EMERGENCY, {"seq": frame.seq, "active": state.emergency_active})
+            if state.emergency_active:
+                bus.emit(Ev.STOP_MOTORS, None)
+                log.warning("PARO DE EMERGENCIA activado (seq=%d)", frame.seq)
+            else:
+                log.warning("PARO DE EMERGENCIA liberado (seq=%d)", frame.seq)
         elif frame.msg_type == MsgType.CMD_PID_PARAM:
             try:
                 ctrl_id, param_id, value = decode_pid_param(frame.payload)

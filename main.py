@@ -97,20 +97,31 @@ async def amain(stop_event: asyncio.Event, loop: asyncio.AbstractEventLoop) -> N
     tasks = [loop.create_task(coro) for _, coro in task_specs]
     task_names = {t: name for t, (name, _) in zip(tasks, task_specs)}
 
-    log.info("Servicio Jetson arrancado. Tareas: %s", list(task_names.values()))
-
-    done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    for t in pending:
-        t.cancel()
-    # PY36: `asyncio.gather` existe desde 3.4; sin cambios.
-    await asyncio.gather(*pending, return_exceptions=True)
-
-    # Propagar excepciones de las tareas terminadas
-    for t in done:
+    # Las tareas son subsistemas independientes (red, video, serial, control).
+    # Si una termina o lanza excepción no debe tumbar a las demás (p.ej. un
+    # fallo de GStreamer/cámara no debe cortar el link serial con el ESP32).
+    # Sólo logueamos; el apagado completo lo dispara únicamente `stop_event`.
+    def _on_task_done(t: asyncio.Future) -> None:
+        if t.cancelled():
+            return
         exc = t.exception()
         if exc:
-            # PY36: Sin `t.get_name()` (3.8+); usamos el dict externo.
-            log.error("Tarea %s terminó con excepción: %s", task_names.get(t, "?"), exc)
+            log.error("Tarea %s terminó con excepción (las demás siguen corriendo): %s",
+                       task_names.get(t, "?"), exc)
+        else:
+            log.warning("Tarea %s terminó (las demás siguen corriendo)", task_names.get(t, "?"))
+
+    for t in tasks:
+        t.add_done_callback(_on_task_done)
+
+    log.info("Servicio Jetson arrancado. Tareas: %s", list(task_names.values()))
+
+    await stop_event.wait()
+
+    for t in tasks:
+        t.cancel()
+    # PY36: `asyncio.gather` existe desde 3.4; sin cambios.
+    await asyncio.gather(*tasks, return_exceptions=True)
 
 
 # PY36: Firma original `argv: list[str] | None`. En 3.6 no existe ni `list[str]`

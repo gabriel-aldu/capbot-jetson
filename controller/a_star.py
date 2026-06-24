@@ -1,7 +1,7 @@
 import heapq
 
 #(up,down,left,right)
-# 1. Your complete 5x5 labyrinth map
+# 1. Your complete 5x6 labyrinth map
 maze = [
     [[1, 0, 1, 0], [1, 1, 0, 0], [1, 1, 0, 0], [1, 1, 0, 0], [1, 0, 0, 1]],
     [[0, 1, 1, 0], [1, 0, 0, 1], [1, 1, 1, 0], [1, 1, 0, 0], [0, 1, 0, 1]],
