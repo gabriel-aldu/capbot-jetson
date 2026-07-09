@@ -142,7 +142,6 @@ class NavController:
             v, w, remaining = self._step(state.pose_x, state.pose_y, state.pose_yaw)
             if self._active:
                 self._emit_vel(v, w)
-                log.info(f"linvel {v} angvel {w}")
                 if tick % status_div == 0:
                     self._status("active", remaining)
 
