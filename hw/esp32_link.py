@@ -130,8 +130,10 @@ class Esp32Link:
         w = max(-rb.max_angular_speed, min(rb.max_angular_speed, w))
         v_left = v - w * (rb.wheel_separation / 2.0)
         v_right = v + w * (rb.wheel_separation / 2.0)
-        log.info(f"left {v_left} right {v_right}")
-        pkt = build_vel_cmd(v_left / rb.wheel_radius, v_right / rb.wheel_radius)
+        wheel_left = v_left / rb.wheel_radius
+        wheel_right = v_right / rb.wheel_radius
+        log.info(f"m/s left {v_left} right {v_right} -> rad/s left {wheel_left} right {wheel_right}")
+        pkt = build_vel_cmd(wheel_left, wheel_right)
         try:
             self._tx_queue.put_nowait(pkt)
         except asyncio.QueueFull:
