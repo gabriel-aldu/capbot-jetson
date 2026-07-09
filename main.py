@@ -23,10 +23,12 @@ import sys
 #       built-in (PEP 585: `list[str]` requiere 3.9+; `X | None` requiere 3.10+).
 from typing import List, Optional  # PY36: añadido
 
-from config import CFG
+from config import CFG, AVAILABLE_MAPS
 from controller.controller import run_controller
 from core.heartbeat import run_host_watchdog
+from core.odometry import odometry
 from hw.esp32_link import Esp32Link
+from net.nav_server import run_nav_server
 from net.udp_server import run_udp_server
 from net.video_pipeline import run_video_pipeline
 from net.ws_server import run_ws_server
@@ -48,6 +50,14 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
                    help="Baudrate del serial (default: 921600)")
     p.add_argument("--hb-timeout-ms", type=int, default=CFG.network.host_heartbeat_timeout_ms,
                    help="Timeout de heartbeat del host en ms (default: 500)")
+    p.add_argument("--map", default=CFG.nav.map_name, choices=sorted(AVAILABLE_MAPS),
+                   help="Mapa activo para navegación (default: %s)" % CFG.nav.map_name)
+    p.add_argument("--start-x", type=float, default=CFG.nav.initial_x,
+                   help="Pose inicial x en metros, frame del mapa (default: 0)")
+    p.add_argument("--start-y", type=float, default=CFG.nav.initial_y,
+                   help="Pose inicial y en metros, frame del mapa (default: 0)")
+    p.add_argument("--start-yaw", type=float, default=CFG.nav.initial_yaw,
+                   help="Yaw inicial en radianes (default: 0)")
     p.add_argument("--log-level", default="INFO",
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return p.parse_args(argv)
@@ -59,6 +69,10 @@ def apply_cli(args: argparse.Namespace) -> None:
     CFG.network.host_heartbeat_timeout_ms = args.hb_timeout_ms
     CFG.serial.port = args.serial
     CFG.serial.baudrate = args.baud
+    CFG.nav.map_name = args.map
+    CFG.nav.initial_x = args.start_x
+    CFG.nav.initial_y = args.start_y
+    CFG.nav.initial_yaw = args.start_yaw
 
 
 def setup_logging(level: str) -> None:
@@ -80,6 +94,9 @@ async def amain(stop_event: asyncio.Event, loop: asyncio.AbstractEventLoop) -> N
     #       deprecado en 3.8 y removido en 3.10, pero en 3.6 sigue siendo válido).
     esp32 = Esp32Link(loop=loop)
 
+    # Odometría: sólo se suscribe al bus (TELEMETRY -> POSE); no necesita task.
+    odometry.attach()
+
     # PY36: El original usaba `asyncio.create_task(coro, name="...")`:
     #       - `asyncio.create_task` fue añadido en 3.7.
     #       - El parámetro `name=` fue añadido en 3.8.
@@ -88,6 +105,7 @@ async def amain(stop_event: asyncio.Event, loop: asyncio.AbstractEventLoop) -> N
     task_specs = [
         ("udp",           run_udp_server(stop_event, loop)),
         ("ws",            run_ws_server(stop_event)),
+        ("nav",           run_nav_server(stop_event, loop)),
         ("video",         run_video_pipeline(stop_event, loop)),
         ("esp32",         esp32.run(stop_event)),
         ("host-watchdog", run_host_watchdog()),

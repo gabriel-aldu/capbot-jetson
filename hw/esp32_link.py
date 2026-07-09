@@ -119,9 +119,18 @@ class Esp32Link:
         if state.emergency_active:
             return
         try:
-            pkt = build_vel_cmd(data["linear"], data["angular"])
-        except KeyError:
+            v = float(data["linear"])    # m/s del chasis
+            w = float(data["angular"])   # rad/s del chasis
+        except (KeyError, TypeError, ValueError):
             return
+        # Clamp de seguridad + mixing diferencial (v,w) -> rad/s por rueda,
+        # que es lo que espera el VEL_CMD del firmware (PID por rueda).
+        rb = CFG.robot
+        v = max(-rb.max_linear_speed, min(rb.max_linear_speed, v))
+        w = max(-rb.max_angular_speed, min(rb.max_angular_speed, w))
+        v_left = v - w * (rb.wheel_separation / 2.0)
+        v_right = v + w * (rb.wheel_separation / 2.0)
+        pkt = build_vel_cmd(v_left / rb.wheel_radius, v_right / rb.wheel_radius)
         try:
             self._tx_queue.put_nowait(pkt)
         except asyncio.QueueFull:

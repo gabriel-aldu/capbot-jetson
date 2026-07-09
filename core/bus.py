@@ -90,6 +90,14 @@ class Ev:
     # Desde ESP32 link (esp32 -> jetson)
     TELEMETRY = "telemetry"              # dict (ya decodificado)
 
+    # Odometría integrada en la Jetson (core/odometry.py)
+    POSE = "pose"                        # dict {x, y, yaw, v, w, stamp, valid}
+
+    # Navegación (host <-> jetson por WS nav, reemplazo de gui_bridge_node)
+    NAV_GOAL = "nav.goal"                # dict {x, y, yaw}
+    NAV_CANCEL = "nav.cancel"            # None
+    NAV_STATUS = "nav.status"            # dict {state, [distance_remaining]}
+
     # Orden interna: detener motores ya (por watchdog o emergencia)
     STOP_MOTORS = "motors.stop"          # None
 

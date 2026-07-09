@@ -13,7 +13,7 @@ Tipos de mensaje propuestos (ajustar con firmware del ESP32):
     0x10  MOTOR_CMD   payload = <hhh> (left, right, aux)
     0x11  BRAKE_ON    payload vacío (freno activo)
     0x12  HEARTBEAT   payload vacío
-    0x16  VEL_CMD     payload = <ff> (linear, angular)
+    0x16  VEL_CMD     payload = <ff> (wheel_left rad/s, wheel_right rad/s)
     0x20  TELEMETRY   payload = JSON UTF-8 o struct binario (a definir)
     0x21  ESP_HELLO   payload vacío (el ESP32 saluda al arrancar)
 
@@ -41,7 +41,7 @@ class SerMsgType(IntEnum):
     PID_PARAM = 0x13      # ctrl_id(1) param_id(1) float32(4)
     SETPOINT_COMP = 0x14  # comp_id(1) reserved(1) float32(4)
     MODE_CMD = 0x15       # mode(1)
-    VEL_CMD = 0x16        # linear(float32) angular(float32)
+    VEL_CMD = 0x16        # wheel_left(float32 rad/s) wheel_right(float32 rad/s)
     TELEMETRY = 0x20
     ESP_HELLO = 0x21
 
@@ -188,6 +188,12 @@ def build_mode_cmd(mode: int) -> bytes:
     return SerFrame(SerMsgType.MODE_CMD, payload).pack()
 
 
-def build_vel_cmd(linear: float, angular: float) -> bytes:
-    payload = struct.pack("<ff", linear, angular)
+def build_vel_cmd(wheel_left: float, wheel_right: float) -> bytes:
+    """VEL_CMD del firmware: setpoint de velocidad POR RUEDA en rad/s.
+
+    La cinemática diferencial (v,w del chasis -> rad/s por rueda) se hace en
+    hw/esp32_link.py; el ESP32 sólo corre un PID de velocidad por rueda
+    (ver capbot-ESP32 Config.h MsgType::VEL_CMD).
+    """
+    payload = struct.pack("<ff", wheel_left, wheel_right)
     return SerFrame(SerMsgType.VEL_CMD, payload).pack()

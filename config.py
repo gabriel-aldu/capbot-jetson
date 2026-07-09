@@ -2,7 +2,11 @@
 
 Todos los valores pueden sobrescribirse desde CLI (ver main.py).
 """
+import os
+
 from dataclasses import dataclass, field
+
+_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 
 @dataclass
@@ -13,6 +17,9 @@ class NetworkConfig:
     udp_ack_port: int = 5006        # jetson -> host
     ws_telemetry_port: int = 8765   # jetson -> host (WS)
     video_port: int = 5000          # jetson -> host (UDP RTP H264)
+    # WS de navegación (mismo puerto/protocolo JSON que el antiguo
+    # gui_bridge_node de ROS2: goal/cancel <-, pose/nav_status/map_name ->).
+    nav_ws_port: int = 8766
 
     # IP del host. Se setea desde CLI o por detección automática
     # (el primer comando UDP recibido fija la IP).
@@ -59,12 +66,67 @@ class VideoConfig:
 
 
 @dataclass
+class RobotConfig:
+    """Geometría del robot. Debe calzar con el firmware (Cfg::WHEEL_CPR) y con
+    los valores que usaba el stack ROS (esp32_serial_bridge.py)."""
+    wheel_radius: float = 0.035      # m
+    wheel_separation: float = 0.17   # m (track width)
+    wheel_cpr: float = 910.0         # cuentas/vuelta del encoder (cuadratura 4x)
+    max_linear_speed: float = 0.3    # m/s, clamp del (v,w) de navegación
+    max_angular_speed: float = 2.0   # rad/s
+
+
+@dataclass
+class NavConfig:
+    """Navegación autónoma (reemplaza a nav2 + gui_bridge_node de ROS2)."""
+    # Nombre del mapa activo. Debe existir en AVAILABLE_MAPS y coincidir con
+    # los assets del host (el host lo auto-selecciona al recibir map_name).
+    map_name: str = "small"
+
+    # Pose inicial del robot en el frame del mapa (m, m, rad). La odometría
+    # integra desde aquí; sin corrección externa (ArUco/EKF) la pose deriva.
+    initial_x: float = 0.0
+    initial_y: float = 0.0
+    initial_yaw: float = 0.0
+
+    # Planificación
+    inflation_radius_m: float = 0.10   # radio de inflado de obstáculos
+    occupied_below: int = 220          # pixel PGM < esto => celda bloqueada (205=unknown)
+
+    # Seguimiento de trayectoria (pure pursuit)
+    lookahead_m: float = 0.15
+    goal_tolerance_m: float = 0.08
+    yaw_tolerance_rad: float = 0.15
+    control_rate_hz: float = 20.0
+    cruise_speed: float = 0.2          # m/s en tramo recto
+    k_heading: float = 2.0             # w = k * error de rumbo
+
+    # Publicación de pose al host (WS nav)
+    pose_publish_hz: float = 10.0
+
+
+# Mapas disponibles (nombre -> (pgm, yaml)). Copias de capbot-host/assets.
+AVAILABLE_MAPS = {
+    "small": (
+        os.path.join(_ASSETS_DIR, "test_map_small.pgm"),
+        os.path.join(_ASSETS_DIR, "test_map_small.yaml"),
+    ),
+    "maze": (
+        os.path.join(_ASSETS_DIR, "test_map_maze.pgm"),
+        os.path.join(_ASSETS_DIR, "test_map_maze.yaml"),
+    ),
+}
+
+
+@dataclass
 class Config:
     network: NetworkConfig = field(default_factory=NetworkConfig)
     protocol: ProtocolConfig = field(default_factory=ProtocolConfig)
     serial: SerialConfig = field(default_factory=SerialConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
+    robot: RobotConfig = field(default_factory=RobotConfig)
+    nav: NavConfig = field(default_factory=NavConfig)
 
 
 # Singleton mutable — se sobrescribe desde main.py tras parsear argv
