@@ -139,7 +139,21 @@ class NavController:
                 continue
 
             tick += 1
-            v, w, remaining = self._step(state.pose_x, state.pose_y, state.pose_yaw)
+            x, y, yaw = state.pose_x, state.pose_y, state.pose_yaw
+
+            if self._planner.is_blocked(x, y):
+                log.warning("Pose actual sobre celda bloqueada (pared/inflado); "
+                            "abortando navegacion")
+                self._finish("aborted")
+                continue
+            if self._phase == _PH_FOLLOW and not self._target_segment_clear(x, y):
+                if not self._try_replan(x, y):
+                    log.warning("Camino hacia el target cruza una pared y no hay "
+                                "ruta alternativa; abortando navegacion")
+                    self._finish("aborted")
+                    continue
+
+            v, w, remaining = self._step(x, y, yaw)
             if self._active:
                 self._emit_vel(v, w)
                 if tick % status_div == 0:
@@ -166,6 +180,27 @@ class NavController:
         w = max(-CFG.robot.max_angular_speed,
                 min(CFG.robot.max_angular_speed, CFG.nav.k_heading * yaw_err))
         return 0.0, w, dist_goal
+
+    def _target_segment_clear(self, x, y):
+        # type: (float, float) -> bool
+        """Chequeo de seguridad: el tramo recto hacia el waypoint que persigue
+        pure pursuit no debe cruzar una celda bloqueada. Detecta el caso en
+        que la deriva de odometria movio al robot fuera del camino planeado
+        y el siguiente tramo ahora corta una pared."""
+        if self._target_idx >= len(self._path):
+            return True
+        tx, ty = self._path[self._target_idx]
+        return self._planner.segment_clear((x, y), (tx, ty))
+
+    def _try_replan(self, x, y):
+        # type: (float, float) -> bool
+        gx, gy, _ = self._goal
+        path = self._planner.plan((x, y), (gx, gy))
+        if not path:
+            return False
+        self._path = path
+        self._target_idx = 0
+        return True
 
     def _pure_pursuit(self, x, y, yaw):
         # type: (float, float, float) -> Tuple[float, float]

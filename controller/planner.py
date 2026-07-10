@@ -85,6 +85,17 @@ class GridPlanner:
         # Centro de la celda.
         return self._occ.pixel_to_world(col + 0.5, row + 0.5)
 
+    def is_blocked(self, x, y):
+        # type: (float, float) -> bool
+        """True si (x,y) mundo cae en pared/inflado o fuera del mapa."""
+        col, row = self.world_to_cell(x, y)
+        return not self._is_free(col, row)
+
+    def segment_clear(self, a_xy, b_xy):
+        # type: (Tuple[float, float], Tuple[float, float]) -> bool
+        """True si el segmento recto entre dos puntos del mundo no cruza pared."""
+        return self._line_free(self.world_to_cell(*a_xy), self.world_to_cell(*b_xy))
+
     def _nearest_free(self, col, row, max_radius=8):
         # type: (int, int, int) -> Optional[Tuple[int, int]]
         """Celda libre más cercana (para poses/goals que caen en el inflado)."""
