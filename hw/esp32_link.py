@@ -65,6 +65,10 @@ class Esp32Link:
         self._tx_queue = asyncio.Queue(loop=self._loop)  # PY36: añadido loop=
         self._buffer = SerialFrameBuffer()
         self._running = False
+        # Último modo mandado al ESP32 (0=manual, arranca ahí igual que el
+        # firmware). Se usa para reenganchar MANUAL automáticamente si llega
+        # un MOTOR_CMD mientras el ESP32 sigue en AUTONOMOUS_NAV.
+        self._current_mode = 0
 
     async def run(self, stop_event: asyncio.Event) -> None:
         if serial is None:
@@ -112,6 +116,14 @@ class Esp32Link:
         # Si hay emergencia activa o host offline, ignorar comandos de motor.
         if state.emergency_active:
             return
+        # Un goal de navegación anterior puede haber dejado al ESP32 en
+        # AUTONOMOUS_NAV (ver controller/controller.py: manda CMD_MODE=1 al
+        # aceptar un goal). En ese modo el firmware ignora MOTOR_CMD. Sólo
+        # reenganchamos MANUAL en la transición (no en cada paquete) para no
+        # frenar el motor en cada tick (onModeCmd hace brake() al entrar a
+        # MANUAL en el firmware).
+        if self._current_mode != 0:
+            self._on_mode({"mode": 0})
         self._tx_queue.put_nowait(build_motor(data["left"], data["right"], data["aux"]))
 
     def _on_vel_cmd(self, data: dict) -> None:
@@ -130,7 +142,10 @@ class Esp32Link:
         w = max(-rb.max_angular_speed, min(rb.max_angular_speed, w))
         v_left = v - w * (rb.wheel_separation / 2.0)
         v_right = v + w * (rb.wheel_separation / 2.0)
-        pkt = build_vel_cmd(v_left / rb.wheel_radius, v_right / rb.wheel_radius)
+        wheel_left = v_left / rb.wheel_radius
+        wheel_right = v_right / rb.wheel_radius
+        log.info(f"m/s left {v_left} right {v_right} -> rad/s left {wheel_left} right {wheel_right}")
+        pkt = build_vel_cmd(wheel_left, wheel_right)
         try:
             self._tx_queue.put_nowait(pkt)
         except asyncio.QueueFull:
@@ -158,8 +173,10 @@ class Esp32Link:
 
     def _on_mode(self, data: dict) -> None:
         try:
-            pkt = build_mode_cmd(data["mode"])
+            mode = data["mode"]
+            pkt = build_mode_cmd(mode)
             self._tx_queue.put_nowait(pkt)
+            self._current_mode = mode
         except (KeyError, asyncio.QueueFull):
             pass
 
