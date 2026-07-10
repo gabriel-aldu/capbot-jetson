@@ -72,8 +72,8 @@ class RobotConfig:
     wheel_radius: float = 0.035      # m
     wheel_separation: float = 0.17   # m (track width)
     wheel_cpr: float = 910.0         # cuentas/vuelta del encoder (cuadratura 4x)
-    max_linear_speed: float = 0.3    # m/s, clamp del (v,w) de navegación
-    max_angular_speed: float = 2.0   # rad/s
+    max_linear_speed: float = 0.15   # m/s, clamp del (v,w) de navegación
+    max_angular_speed: float = 1.0   # rad/s
 
 
 @dataclass
@@ -81,7 +81,9 @@ class NavConfig:
     """Navegación autónoma (reemplaza a nav2 + gui_bridge_node de ROS2)."""
     # Nombre del mapa activo. Debe existir en AVAILABLE_MAPS y coincidir con
     # los assets del host (el host lo auto-selecciona al recibir map_name).
-    map_name: str = "small"
+    # OJO: "small" es un rectángulo vacío sin paredes interiores; con él el
+    # planner traza líneas rectas. Para la arena con paredes usar "maze".
+    map_name: str = "maze"
 
     # Pose inicial del robot en el frame del mapa (m, m, rad). La odometría
     # integra desde aquí; sin corrección externa (ArUco/EKF) la pose deriva.
@@ -98,7 +100,7 @@ class NavConfig:
     goal_tolerance_m: float = 0.08
     yaw_tolerance_rad: float = 0.15
     control_rate_hz: float = 20.0
-    cruise_speed: float = 0.2          # m/s en tramo recto
+    cruise_speed: float = 0.1          # m/s en tramo recto
     k_heading: float = 2.0             # w = k * error de rumbo
 
     # Publicación de pose al host (WS nav)
