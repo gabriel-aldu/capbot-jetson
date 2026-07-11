@@ -15,16 +15,23 @@ sistema (unico requisito real aqui) y deja la deteccion para el PC.
 """
 
 import argparse
+import site
 import sys
 import select
 import termios
 import tty
 from pathlib import Path
 
-# Fuerza el cv2 del sistema (dist-packages, con GStreamer) por delante
-# del cv2 de pip en ~/.local (sin GStreamer) que Python prioriza por
-# defecto. Debe ir antes de "import cv2".
-sys.path.insert(0, f"/usr/lib/python{sys.version_info.major}.{sys.version_info.minor}/dist-packages")
+# El cv2 de pip en ~/.local (sin GStreamer) tapa al cv2 del sistema
+# (dist-packages, con GStreamer) porque el user site-packages va antes
+# en sys.path por defecto. En vez de insertar dist-packages a mano
+# (queda duplicado, ya esta mas atras en sys.path, y el bootstrap de
+# cv2 revienta con "recursion is detected during loading of cv2 binary
+# extensions"), se saca el user site-packages para que la busqueda caiga
+# de forma natural en el cv2 del sistema. Debe ir antes de "import cv2".
+_user_site = site.getusersitepackages()
+if _user_site in sys.path:
+    sys.path.remove(_user_site)
 
 import cv2
 import numpy as np
