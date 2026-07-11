@@ -47,6 +47,17 @@ Formato cam_to_base.yaml (extrinsics camera_link_optical -> base_link):
 
 Si no pasas --extrinsics, se usa identidad => se reporta la pose de la camara
 en map (no del base_link). Es un buen primer paso para validar detecciones.
+
+Captura en vivo en la Jetson: el cv2 del sistema (con soporte GStreamer,
+necesario para nvarguscamerasrc) no trae el modulo contrib (cv2.aruco); el
+cv2 de pip que si trae cv2.aruco no trae GStreamer. Ningun cv2 instalado
+tiene ambos a la vez. Como aqui la deteccion SI tiene que correr en la
+Jetson (a diferencia de capture_jetson.py, que solo guarda fotos para
+calibrar despues en el PC), la captura en vivo usa GStreamer/PyGObject
+puro (clase GstCameraCapture) para obtener frames como numpy array, y el
+cv2 de pip (con aruco) se usa solo para procesarlos en memoria. El modo
+--video-source (debug offline en PC) no se ve afectado: sigue usando
+cv2.VideoCapture normal, sin GStreamer.
 """
 
 import argparse
@@ -330,6 +341,76 @@ def load_extrinsics(path):
 # Fuentes de video
 # =============================================================================
 
+class GstCameraCapture:
+    """Captura BGR desde nvarguscamerasrc via GStreamer/PyGObject puro.
+
+    Expone isOpened()/read()/release() como cv2.VideoCapture para no
+    tener que tocar el resto del script. Ver nota en el docstring del
+    modulo sobre por que no se usa cv2.VideoCapture(..., CAP_GSTREAMER)
+    aqui.
+    """
+
+    def __init__(self, sensor_id, width, height, fps, flip):
+        import gi
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+        self._Gst = Gst
+
+        Gst.init(None)
+        self._width = width
+        self._height = height
+
+        pipeline_str = (
+            f"nvarguscamerasrc sensor-id={sensor_id} ! "
+            f"video/x-raw(memory:NVMM), width=(int){width}, height=(int){height}, "
+            f"format=(string)NV12, framerate=(fraction){fps}/1 ! "
+            f"nvvidconv flip-method={flip} ! "
+            f"video/x-raw, width=(int){width}, height=(int){height}, format=(string)BGRx ! "
+            f"videoconvert ! video/x-raw, format=(string)BGR ! "
+            f"appsink name=sink emit-signals=false sync=false drop=true max-buffers=1"
+        )
+        print(f"[localizer] pipeline (GStreamer/PyGObject):\n  {pipeline_str}")
+
+        self._pipeline = Gst.parse_launch(pipeline_str)
+        self._sink = self._pipeline.get_by_name("sink")
+        self._pipeline.set_state(Gst.State.PLAYING)
+        state = self._pipeline.get_state(5 * Gst.SECOND)
+        self._opened = state[0] == Gst.StateChangeReturn.SUCCESS
+        if not self._opened:
+            bus = self._pipeline.get_bus()
+            msg = bus.timed_pop_filtered(0, Gst.MessageType.ERROR)
+            if msg is not None:
+                err, dbg = msg.parse_error()
+                print(f"[localizer] GStreamer error: {err.message} ({dbg})", file=sys.stderr)
+
+    def isOpened(self):
+        return self._opened
+
+    def read(self):
+        Gst = self._Gst
+        sample = self._sink.emit("pull-sample")
+        if sample is None:
+            return False, None
+        buf = sample.get_buffer()
+        ok, mapinfo = buf.map(Gst.MapFlags.READ)
+        if not ok:
+            return False, None
+        try:
+            # reshape defensivo: algunas resoluciones traen padding de fila
+            # (stride > width*3), asi que se recorta antes de dar forma HxWx3.
+            row_bytes = mapinfo.size // self._height
+            frame = (np.frombuffer(mapinfo.data, dtype=np.uint8)
+                      .reshape((self._height, row_bytes))[:, :self._width * 3]
+                      .reshape((self._height, self._width, 3))
+                      .copy())
+        finally:
+            buf.unmap(mapinfo)
+        return True, frame
+
+    def release(self):
+        self._pipeline.set_state(self._Gst.State.NULL)
+
+
 def open_video_source(args):
     if args.video_source is not None:
         try:
@@ -338,16 +419,12 @@ def open_video_source(args):
             src = args.video_source
         return cv2.VideoCapture(src)
 
-    pipeline = (
-        f"nvarguscamerasrc sensor-id={args.sensor_id} ! "
-        f"video/x-raw(memory:NVMM), width=(int){args.width}, height=(int){args.height}, "
-        f"format=(string)NV12, framerate=(fraction){args.fps}/1 ! "
-        f"nvvidconv flip-method={args.flip} ! "
-        f"video/x-raw, width=(int){args.width}, height=(int){args.height}, format=(string)BGRx ! "
-        f"videoconvert ! video/x-raw, format=(string)BGR ! appsink drop=true max-buffers=1"
-    )
-    print(f"[localizer] pipeline:\n  {pipeline}")
-    return cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+    try:
+        return GstCameraCapture(args.sensor_id, args.width, args.height, args.fps, args.flip)
+    except ImportError:
+        print("ERROR: falta PyGObject (python3-gi, gir1.2-gstreamer-1.0) "
+              "para la captura en vivo por GStreamer.", file=sys.stderr)
+        sys.exit(1)
 
 
 # =============================================================================
