@@ -42,9 +42,9 @@ Al aceptar un goal, la Jetson manda `MODE_CMD(1)` (AUTONOMOUS_NAV) al ESP32
 automáticamente; el switch de modo del host sigue funcionando para volver a
 manual.
 
-**Localización**: sólo odometría on-board del ESP32 (encoders+IMU, sin
-ArUco/EKF por ahora): la pose deriva con el tiempo y la pose inicial debe
-fijarse con `--start-x/y/yaw` según dónde se coloque el robot en el mapa.
+**Localización**: sólo odometría on-board del ESP32 (encoders+IMU, sin EKF
+por ahora): la pose deriva con el tiempo y la pose inicial debe fijarse con
+`--start-x/y/yaw` según dónde se coloque el robot en el mapa.
 
 ## Arquitectura
 

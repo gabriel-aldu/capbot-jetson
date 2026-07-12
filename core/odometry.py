@@ -14,9 +14,9 @@ y le aplica una transformación rígida (rotación + traslación) para que esa
 referencia coincida con la pose inicial configurada (config/CLI), y las
 muestras siguientes seguidas de esa misma transformación.
 
-Sin corrección externa (ArUco/EKF) la pose deriva con el tiempo; la pose
-inicial se fija por config/CLI y debe corresponder a dónde se coloca
-físicamente el robot en el mapa.
+Sin corrección externa la pose deriva con el tiempo; la pose inicial se fija
+por config/CLI y debe corresponder a dónde se coloca físicamente el robot en
+el mapa.
 
 Publica cada actualización como Ev.POSE y la refleja en `state.pose_*` para
 consumidores síncronos (nav_server, controller).
