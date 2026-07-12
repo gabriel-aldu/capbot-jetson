@@ -88,8 +88,11 @@ class NavConfig:
 
     # Pose inicial del robot en el frame del mapa (m, m, rad). La odometría
     # integra desde aquí; sin corrección externa la pose deriva.
-    initial_x: float = 0.0
-    initial_y: float = 0.0
+    # Esquina suroeste (abajo-izquierda) del área libre de test_map_small,
+    # con el centro del robot (caja de 22x22cm) desplazado 11cm de cada
+    # pared para no arrancar incrustado en ellas. Yaw 0 = mirando al este (+X).
+    initial_x: float = -0.24
+    initial_y: float = -1.39
     initial_yaw: float = 0.0
 
     # Planificación
