@@ -6,7 +6,9 @@ import os
 
 from dataclasses import dataclass, field
 
-_ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_ASSETS_DIR = os.path.join(_BASE_DIR, "assets")
+_ARUCO_DIR = os.path.join(_BASE_DIR, "aruco")
 
 
 @dataclass
@@ -77,6 +79,34 @@ class RobotConfig:
 
 
 @dataclass
+class ArucoConfig:
+    """Localizacion por marcadores ArUco (validacion, sin fusion con odometria).
+
+    Reutiliza el localizador standalone (aruco/localizer_standalone.py) ya
+    calibrado. Comparte la unica camara CSI con net/video_pipeline.py via un
+    'tee' en la pipeline GStreamer (misma tecnica que csi_camera_node.py de
+    capbot-ros-foxy: nvarguscamerasrc solo admite una sesion de captura)."""
+    enabled: bool = True
+
+    camera_info_path: str = os.path.join(_ARUCO_DIR, "imx219_camera_info.yaml")
+    markers_db_path: str = os.path.join(_ARUCO_DIR, "markers_db_maze.yaml")
+    extrinsics_path: str = os.path.join(_ARUCO_DIR, "cam_to_base.yaml")
+
+    flip_method: int = 0
+
+    # Robustez (mismos defaults que ArucoLocalizer / test_localizer.py).
+    max_distance: float = 1.5
+    max_reproj_error_px: float = 3.0
+    min_marker_area_px: float = 150.0
+    ambiguity_ratio_threshold: float = 1.5
+    filter_window: int = 5
+
+    # Tasa maxima de procesamiento de deteccion (cv2.aruco es costoso en la
+    # Nano); la rama de video hacia el host no se ve afectada por esto.
+    process_rate_hz: float = 5.0
+
+
+@dataclass
 class NavConfig:
     """Navegación autónoma (reemplaza a nav2 + gui_bridge_node de ROS2)."""
     # Nombre del mapa activo. Debe existir en AVAILABLE_MAPS y coincidir con
@@ -92,7 +122,7 @@ class NavConfig:
     initial_yaw: float = 0.0
 
     # Planificación
-    inflation_radius_m: float = 0.10   # radio de inflado de obstáculos
+    inflation_radius_m: float = 0.01   # radio de inflado de obstáculos
     occupied_below: int = 220          # pixel PGM < esto => celda bloqueada (205=unknown)
 
     # Seguimiento de trayectoria (pure pursuit)
@@ -129,6 +159,7 @@ class Config:
     video: VideoConfig = field(default_factory=VideoConfig)
     robot: RobotConfig = field(default_factory=RobotConfig)
     nav: NavConfig = field(default_factory=NavConfig)
+    aruco: ArucoConfig = field(default_factory=ArucoConfig)
 
 
 # Singleton mutable — se sobrescribe desde main.py tras parsear argv
