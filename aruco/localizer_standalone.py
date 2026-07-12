@@ -223,6 +223,7 @@ class ArucoLocalizer:
             "x": None, "y": None, "yaw": None,
             "n_used": 0, "mean_reproj_error_px": None,
             "diagnostics": [],
+            "per_marker": [],
             "overlay_corners": corners, "overlay_ids": ids,
         }
         if ids is None or len(ids) == 0:
@@ -276,6 +277,14 @@ class ArucoLocalizer:
 
             weight = area / (1.0 + err)
             estimates.append((marker_id, T_map_base, weight, err))
+            result["per_marker"].append({
+                "id": marker_id,
+                "x": float(T_map_base[0, 3]),
+                "y": float(T_map_base[1, 3]),
+                "yaw": float(R.from_matrix(T_map_base[:3, :3]).as_euler("xyz")[2]),
+                "reproj_err_px": err,
+                "ambiguous": ambiguous,
+            })
             tag = "AMB" if ambiguous else "OK"
             result["diagnostics"].append(
                 f"id={marker_id} {tag}(d={dist:.2f}m,err={err:.2f}px,"
