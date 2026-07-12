@@ -92,7 +92,7 @@ class NavConfig:
     initial_yaw: float = 0.0
 
     # Planificación
-    inflation_radius_m: float = 0.10   # radio de inflado de obstáculos
+    inflation_radius_m: float = 0.01   # radio de inflado de obstáculos
     occupied_below: int = 220          # pixel PGM < esto => celda bloqueada (205=unknown)
 
     # Seguimiento de trayectoria (pure pursuit)
