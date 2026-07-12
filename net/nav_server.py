@@ -10,7 +10,8 @@ Mismo puerto (8766) y mismo protocolo JSON que el nodo ROS, así el host
   GUI -> Jetson: {"type":"goal","x":..,"y":..,"yaw":..}
                  {"type":"cancel"}
 
-La pose sale de core/odometry.py (state.pose_*) a nav.pose_publish_hz; los
+La pose sale de core/odometry.py (state.pose_*, reexpresando en el frame del
+mapa la odometría on-board del ESP32) a nav.pose_publish_hz; los
 goals/cancel se convierten en Ev.NAV_GOAL / Ev.NAV_CANCEL que consume
 controller/controller.py, y los Ev.NAV_STATUS de éste se difunden aquí.
 """

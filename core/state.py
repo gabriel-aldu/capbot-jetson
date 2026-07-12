@@ -16,13 +16,14 @@ class ServiceState:
     video_state: str = "stopped"
     emergency_active: bool = False
 
-    # Pose del robot en el frame del mapa (odometría integrada en la Jetson).
+    # Pose del robot en el frame del mapa (odometría on-board del ESP32,
+    # encoders+IMU, reexpresada al frame del mapa por core/odometry.py).
     pose_x: float = 0.0
     pose_y: float = 0.0
     pose_yaw: float = 0.0
     pose_v: float = 0.0        # m/s
     pose_w: float = 0.0        # rad/s
-    pose_stamp: float = 0.0    # time.time() de la última integración
+    pose_stamp: float = 0.0    # time.time() de la última muestra
     pose_valid: bool = False   # True tras la primera telemetría del ESP32
 
     # Contadores para diagnóstico

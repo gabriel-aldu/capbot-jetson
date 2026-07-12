@@ -29,9 +29,10 @@ Flujo del "2D Goal Pose" del host:
 2. `controller/planner.py` planifica con A* sobre el mapa de ocupación
    (`assets/*.pgm|.yaml`, copias de los del host) inflado por el radio del
    robot.
-3. `controller/controller.py` sigue el camino con pure pursuit usando la
-   odometría diferencial integrada en `core/odometry.py` (a partir de
-   `vel_left_cps`/`vel_right_cps` del ESP32) y emite `(v, w)` del chasis.
+3. `controller/controller.py` sigue el camino con pure pursuit usando la pose
+   que el ESP32 estima on-board (encoders+IMU, bloque `odo` de la telemetría)
+   y que `core/odometry.py` reexpresa en el frame del mapa, y emite `(v, w)`
+   del chasis.
 4. `hw/esp32_link.py` convierte `(v, w)` a rad/s por rueda (cinemática
    diferencial) y manda `VEL_CMD` al ESP32, cuyo PID por rueda hace el resto.
 5. El progreso (`accepted/active/succeeded/...` + `distance_remaining`) y la
@@ -41,9 +42,9 @@ Al aceptar un goal, la Jetson manda `MODE_CMD(1)` (AUTONOMOUS_NAV) al ESP32
 automáticamente; el switch de modo del host sigue funcionando para volver a
 manual.
 
-**Localización**: sólo odometría de ruedas (sin ArUco/EKF por ahora): la pose
-deriva con el tiempo y la pose inicial debe fijarse con `--start-x/y/yaw`
-según dónde se coloque el robot en el mapa.
+**Localización**: sólo odometría on-board del ESP32 (encoders+IMU, sin
+ArUco/EKF por ahora): la pose deriva con el tiempo y la pose inicial debe
+fijarse con `--start-x/y/yaw` según dónde se coloque el robot en el mapa.
 
 ## Arquitectura
 
@@ -56,7 +57,7 @@ jetson_service/
 │   ├── bus.py              # Bus de eventos asyncio
 │   ├── state.py            # Estado compartido (incluye pose)
 │   ├── heartbeat.py        # Watchdogs de red + serial
-│   ├── odometry.py         # Odometría diferencial desde telemetría del ESP32
+│   ├── odometry.py         # Reexpresa la odometría on-board del ESP32 (odo) al frame del mapa
 │   └── occupancy_map.py    # Loader de mapas ROS (.pgm + .yaml)
 ├── protocol/
 │   ├── udp_frame.py        # Frame binario 16B (idéntico al host)

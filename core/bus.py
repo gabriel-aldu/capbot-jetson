@@ -90,7 +90,8 @@ class Ev:
     # Desde ESP32 link (esp32 -> jetson)
     TELEMETRY = "telemetry"              # dict (ya decodificado)
 
-    # Odometría integrada en la Jetson (core/odometry.py)
+    # Pose fusionada por el ESP32 (encoders+IMU), reexpresada en el frame del
+    # mapa por core/odometry.py
     POSE = "pose"                        # dict {x, y, yaw, v, w, stamp, valid}
 
     # Navegación (host <-> jetson por WS nav, reemplazo de gui_bridge_node)

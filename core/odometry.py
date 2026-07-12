@@ -1,10 +1,18 @@
-"""Odometría diferencial integrada en la Jetson.
+"""Pose del robot a partir de la odometría on-board del ESP32.
 
-Reemplaza al par esp32_serial_bridge (/odom) + EKF del stack ROS2: el ESP32
-sólo reporta velocidades crudas de rueda (vel_left_cps / vel_right_cps en
-cuentas/seg, ver SensorHub::buildPayload) y aquí se integra la pose (x, y,
-yaw) en el frame del mapa con el mismo esquema "midpoint" que usaba
-diff_drive_controller.
+El ESP32 (lib/Sensors/Odometry.cpp) fusiona encoders + IMU (filtro
+complementario gyro-Z) y manda su propia estimación de pose/velocidad en el
+bloque "odo" de cada telemetría (ver SensorHub::buildPayload): x, y, a (yaw en
+grados), v (m/s), w (yaw rate en grados/s). La Jetson ya NO reintegra desde
+vel_left_cps/vel_right_cps (eso quedó obsoleto y perdía la corrección de la
+IMU); sólo reexpresa esa pose en el frame del mapa.
+
+El ESP32 arranca su odometría siempre en (0, 0, 0) (Odometry::reset() en su
+setup()) y nunca se le resetea desde la Jetson. Por eso, al conectar (o tras
+un reset()), esta clase fija como referencia la primera muestra "odo" recibida
+y le aplica una transformación rígida (rotación + traslación) para que esa
+referencia coincida con la pose inicial configurada (config/CLI), y las
+muestras siguientes seguidas de esa misma transformación.
 
 Sin corrección externa (ArUco/EKF) la pose deriva con el tiempo; la pose
 inicial se fija por config/CLI y debe corresponder a dónde se coloca
@@ -24,19 +32,17 @@ from core.state import state
 
 log = logging.getLogger(__name__)
 
-_TWO_PI = 2.0 * math.pi
-
-# Si pasa más de esto entre telemetrías, el dt no es confiable (link caído,
-# arranque): se descarta el paso de integración.
-_MAX_DT_S = 0.5
-
 
 class Odometry:
     def __init__(self):
-        self._x = CFG.nav.initial_x
-        self._y = CFG.nav.initial_y
-        self._theta = CFG.nav.initial_yaw
-        self._last_t = None  # type: float
+        self._map_x0 = CFG.nav.initial_x
+        self._map_y0 = CFG.nav.initial_y
+        self._map_yaw0 = CFG.nav.initial_yaw
+        # Primera muestra "odo" del ESP32 tras el (re)arranque; sirve de
+        # referencia para la transformación rígida. None = todavía sin fijar.
+        self._ref_fx = None    # type: float
+        self._ref_fy = None    # type: float
+        self._ref_ftheta = None  # type: float
 
     def attach(self):
         # type: () -> None
@@ -49,10 +55,14 @@ class Odometry:
 
     def reset(self, x, y, yaw):
         # type: (float, float, float) -> None
-        self._x = float(x)
-        self._y = float(y)
-        self._theta = float(yaw)
-        self._last_t = None
+        self._map_x0 = float(x)
+        self._map_y0 = float(y)
+        self._map_yaw0 = float(yaw)
+        # La próxima telemetría recibida vuelve a fijar la referencia.
+        self._ref_fx = None
+        self._ref_fy = None
+        self._ref_ftheta = None
+        state.pose_valid = False
         log.info("Odometría reiniciada a x=%.3f y=%.3f yaw=%.3f", x, y, yaw)
 
     # ------------------------------------------------------------
@@ -60,52 +70,49 @@ class Odometry:
         # type: (dict) -> None
         if not isinstance(data, dict):
             return
-        u = data.get("u")
-        if not isinstance(u, dict):
+        odo = data.get("odo")
+        if not isinstance(odo, dict):
             return
         try:
-            vel_left_cps = float(u["vel_left_cps"])
-            vel_right_cps = float(u["vel_right_cps"])
+            fx = float(odo["x"])
+            fy = float(odo["y"])
+            ftheta = math.radians(float(odo["a"]))
+            v = float(odo["v"])
+            w = math.radians(float(odo["w"]))
         except (KeyError, TypeError, ValueError):
             return
 
-        rb = CFG.robot
-        # cuentas/s -> rad/s de rueda -> m/s tangencial.
-        omega_left = (vel_left_cps / rb.wheel_cpr) * _TWO_PI
-        omega_right = (vel_right_cps / rb.wheel_cpr) * _TWO_PI
-        v_left = omega_left * rb.wheel_radius
-        v_right = omega_right * rb.wheel_radius
+        if self._ref_fx is None:
+            self._ref_fx = fx
+            self._ref_fy = fy
+            self._ref_ftheta = ftheta
 
-        # Cinemática diferencial estándar.
-        v = (v_left + v_right) / 2.0
-        w = (v_right - v_left) / rb.wheel_separation
+        # Transformación rígida: delta en el frame del ESP32 (desde la
+        # referencia) rotado y trasladado al frame del mapa.
+        dx = fx - self._ref_fx
+        dy = fy - self._ref_fy
+        dtheta = ftheta - self._ref_ftheta
+
+        yaw0 = self._map_yaw0
+        cos0 = math.cos(yaw0)
+        sin0 = math.sin(yaw0)
+        x = self._map_x0 + dx * cos0 - dy * sin0
+        y = self._map_y0 + dx * sin0 + dy * cos0
+        yaw = math.atan2(math.sin(yaw0 + dtheta), math.cos(yaw0 + dtheta))
 
         now = time.time()
-        if self._last_t is None or (now - self._last_t) > _MAX_DT_S:
-            dt = 0.0
-        else:
-            dt = now - self._last_t
-        self._last_t = now
-
-        # Integración midpoint (más precisa que Euler cuando w != 0).
-        half_dtheta = 0.5 * w * dt
-        self._x += v * math.cos(self._theta + half_dtheta) * dt
-        self._y += v * math.sin(self._theta + half_dtheta) * dt
-        self._theta += w * dt
-        self._theta = math.atan2(math.sin(self._theta), math.cos(self._theta))
-
-        state.pose_x = self._x
-        state.pose_y = self._y
-        state.pose_yaw = self._theta
+        state.pose_x = x
+        state.pose_y = y
+        state.pose_yaw = yaw
         state.pose_v = v
         state.pose_w = w
         state.pose_stamp = now
         state.pose_valid = True
 
         bus.emit(Ev.POSE, {
-            "x": self._x,
-            "y": self._y,
-            "yaw": self._theta,
+            "x": x,
+            "y": y,
+            "yaw": yaw,
             "v": v,
             "w": w,
             "stamp": now,

@@ -6,9 +6,10 @@ Reemplaza a nav2 + gui_bridge_node del stack ROS2:
   2. Se planifica con A* sobre el mapa de ocupación (controller/planner.py),
      el mismo .pgm/.yaml que muestra el host.
   3. Un lazo a CFG.nav.control_rate_hz sigue el camino con pure pursuit usando
-     la odometría integrada en la Jetson (core/odometry.py) y emite Ev.CMD_VEL
-     {linear, angular} del chasis; hw/esp32_link.py hace la cinemática
-     diferencial y manda VEL_CMD (rad/s por rueda) al ESP32.
+     la pose que el ESP32 estima on-board (encoders+IMU) y que core/odometry.py
+     reexpresa en el frame del mapa, emitiendo Ev.CMD_VEL {linear, angular} del
+     chasis; hw/esp32_link.py hace la cinemática diferencial y manda VEL_CMD
+     (rad/s por rueda) al ESP32.
   4. El progreso se reporta como Ev.NAV_STATUS (accepted/active/succeeded/...),
      que nav_server difunde al host con el mismo JSON que usaba ROS2.
 
