@@ -60,6 +60,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
                    help="Yaw inicial en radianes (default: 0)")
     p.add_argument("--log-level", default="INFO",
                    choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    p.add_argument("--no-aruco", action="store_true",
+                   help="Deshabilita la rama de localizacion ArUco (solo video al host)")
     return p.parse_args(argv)
 
 
@@ -73,6 +75,7 @@ def apply_cli(args: argparse.Namespace) -> None:
     CFG.nav.initial_x = args.start_x
     CFG.nav.initial_y = args.start_y
     CFG.nav.initial_yaw = args.start_yaw
+    CFG.aruco.enabled = not args.no_aruco
 
 
 def setup_logging(level: str) -> None:
