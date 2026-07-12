@@ -125,25 +125,29 @@ class VideoPipeline:
             K, D, w_cal, h_cal = load_camera_info(CFG.aruco.camera_info_path)
             markers_db, marker_size, dict_name = load_markers_db(CFG.aruco.markers_db_path)
             T_cam_base = load_extrinsics(CFG.aruco.extrinsics_path)
-        except (OSError, KeyError, ValueError) as exc:
-            log.warning("ArUco deshabilitado: no se pudo cargar calibracion (%s)", exc)
-            return None
 
-        if (CFG.video.width, CFG.video.height) != (w_cal, h_cal):
-            log.warning(
-                "ArUco: capturando a %dx%d pero calibrado a %dx%d; K/D quedan mal escaladas",
-                CFG.video.width, CFG.video.height, w_cal, h_cal,
+            if (CFG.video.width, CFG.video.height) != (w_cal, h_cal):
+                log.warning(
+                    "ArUco: capturando a %dx%d pero calibrado a %dx%d; K/D quedan mal escaladas",
+                    CFG.video.width, CFG.video.height, w_cal, h_cal,
+                )
+
+            return ArucoLocalizer(
+                K=K, D=D, markers_db=markers_db, marker_size=marker_size,
+                aruco_dict_name=dict_name, T_cam_base=T_cam_base,
+                max_distance=CFG.aruco.max_distance,
+                max_reproj_error_px=CFG.aruco.max_reproj_error_px,
+                min_marker_area_px=CFG.aruco.min_marker_area_px,
+                ambiguity_ratio_threshold=CFG.aruco.ambiguity_ratio_threshold,
+                filter_window=CFG.aruco.filter_window,
             )
-
-        return ArucoLocalizer(
-            K=K, D=D, markers_db=markers_db, marker_size=marker_size,
-            aruco_dict_name=dict_name, T_cam_base=T_cam_base,
-            max_distance=CFG.aruco.max_distance,
-            max_reproj_error_px=CFG.aruco.max_reproj_error_px,
-            min_marker_area_px=CFG.aruco.min_marker_area_px,
-            ambiguity_ratio_threshold=CFG.aruco.ambiguity_ratio_threshold,
-            filter_window=CFG.aruco.filter_window,
-        )
+        except (OSError, KeyError, ValueError) as exc:
+            # No debe tumbar el servicio entero: video_pipeline corre como una
+            # de las tasks de asyncio.wait(FIRST_COMPLETED) en main.py, y si
+            # esta constructor lanza sin atajar, cancela TODAS las demas
+            # tasks (nav_server, esp32, etc.) y el servicio muere en silencio.
+            log.warning("ArUco deshabilitado: no se pudo inicializar (%s)", exc)
+            return None
 
     async def start(self, host_ip: str) -> None:
         if not _GST_AVAILABLE:
