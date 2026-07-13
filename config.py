@@ -102,7 +102,7 @@ class NavConfig:
     # rotación a 5cm de la parte trasera (12cm del frente), el radio
     # circunscrito para poder girar en el sitio sin chocar es
     # sqrt(10^2 + 12^2) ≈ 0.156m; se redondea a 0.16 con margen.
-    inflation_radius_m: float = 0.125   # radio de inflado de obstáculos
+    inflation_radius_m: float = 0.12   # radio de inflado de obstáculos
     occupied_below: int = 220          # pixel PGM < esto => celda bloqueada (205=unknown)
     # Resolución de la rejilla de PLANIFICACIÓN (m/celda). El PGM se
     # submuestrea a esta resolución antes de A* (min-pooling conservador:
@@ -115,7 +115,7 @@ class NavConfig:
     # linealmente a 0 en ese radio), empujando la ruta a pasar por el medio
     # del pasillo en vez de rozar el borde del inflado. 0 = sin sesgo.
     center_bias_radius_m: float = 0.15
-    center_bias_weight: float = 10.0
+    center_bias_weight: float = 6.0
 
     # Seguimiento de trayectoria (pure pursuit)
     lookahead_m: float = 0.15
