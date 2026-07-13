@@ -89,14 +89,20 @@ class NavConfig:
     # Pose inicial del robot en el frame del mapa (m, m, rad). La odometría
     # integra desde aquí; sin corrección externa la pose deriva.
     # Esquina suroeste (abajo-izquierda) del área libre de test_map_small,
-    # con el centro del robot (caja de 22x22cm) desplazado 11cm de cada
+    # con el centro de rotación del robot (caja de 20x17cm, centro de
+    # rotación/IMU a 5cm de la parte trasera) desplazado 11cm de cada
     # pared para no arrancar incrustado en ellas. Yaw 0 = mirando al este (+X).
     initial_x: float = 0.0
     initial_y: float = -0.75
     initial_yaw: float = 0.0
 
     # Planificación
-    inflation_radius_m: float = 0.13   # radio de inflado de obstáculos
+    # El planner trata al robot como un punto en su centro de rotación
+    # (ver planner.py). Con la caja real de 20x17cm y el centro de
+    # rotación a 5cm de la parte trasera (12cm del frente), el radio
+    # circunscrito para poder girar en el sitio sin chocar es
+    # sqrt(10^2 + 12^2) ≈ 0.156m; se redondea a 0.16 con margen.
+    inflation_radius_m: float = 0.16   # radio de inflado de obstáculos
     occupied_below: int = 220          # pixel PGM < esto => celda bloqueada (205=unknown)
     # Resolución de la rejilla de PLANIFICACIÓN (m/celda). El PGM se
     # submuestrea a esta resolución antes de A* (min-pooling conservador:
@@ -112,15 +118,15 @@ class NavConfig:
     center_bias_weight: float = 10.0
 
     # Seguimiento de trayectoria (pure pursuit)
-    lookahead_m: float = 0.10
+    lookahead_m: float = 0.15
     goal_tolerance_m: float = 0.08
     yaw_tolerance_rad: float = 0.15
-    control_rate_hz: float = 20.0
+    control_rate_hz: float = 25.0
     cruise_speed: float = 0.1          # m/s en tramo recto
     k_heading: float = 2.0             # w = k * error de rumbo
 
     # Publicación de pose al host (WS nav)
-    pose_publish_hz: float = 10.0
+    pose_publish_hz: float = 5.0
 
 
 # Mapas disponibles (nombre -> (pgm, yaml)). Copias de capbot-host/assets.
