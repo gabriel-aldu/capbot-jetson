@@ -98,6 +98,12 @@ class NavConfig:
     # Planificación
     inflation_radius_m: float = 0.12   # radio de inflado de obstáculos
     occupied_below: int = 220          # pixel PGM < esto => celda bloqueada (205=unknown)
+    # Resolución de la rejilla de PLANIFICACIÓN (m/celda). El PGM se
+    # submuestrea a esta resolución antes de A* (min-pooling conservador:
+    # una pared de 1 px nunca desaparece). Con el maze @ 0.003 m/px, 0.015
+    # deja la rejilla en ~101x121 celdas (25x menos que el PGM). Si es <=
+    # la resolución nativa del mapa no se submuestrea (p.ej. "small" @ 0.025).
+    planning_resolution_m: float = 0.015
     # Sesgo hacia el centro: más allá del inflado, las celdas a menos de
     # center_bias_radius_m de una pared pagan un costo extra en A* (decae
     # linealmente a 0 en ese radio), empujando la ruta a pasar por el medio

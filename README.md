@@ -26,9 +26,9 @@ Flujo del "2D Goal Pose" del host:
 
 1. El host manda `{"type":"goal","x":..,"y":..,"yaw":..}` por WS 8766
    (mismo protocolo JSON que el antiguo `gui_bridge_node`; el host no cambia).
-2. `controller/planner.py` planifica con A* sobre el mapa de ocupación
+2. `controller/a_star.py` planifica con A* sobre el mapa de ocupación
    (`assets/*.pgm|.yaml`, copias de los del host) inflado por el radio del
-   robot.
+   robot (transformada de distancia + gradiente suave de inflado).
 3. `controller/controller.py` sigue el camino con pure pursuit usando la pose
    que el ESP32 estima on-board (encoders+IMU, bloque `odo` de la telemetría)
    y que `core/odometry.py` reexpresa en el frame del mapa, y emite `(v, w)`
@@ -68,7 +68,8 @@ jetson_service/
 │   ├── nav_server.py       # Goals/pose/estado de navegación (WS 8766)
 │   └── video_pipeline.py   # GStreamer IMX219 → H264 HW → UDP
 ├── controller/
-│   ├── planner.py          # A* sobre rejilla de ocupación inflada
+│   ├── a_star.py           # A* sobre rejilla submuestreada + gradiente de inflado
+│   ├── planner.py          # (legado) A* de resolución completa, inflado por disco
 │   └── controller.py       # Pure pursuit + ciclo de vida del goal
 ├── hw/
 │   └── esp32_link.py       # Serial bidireccional con ESP32 (mixing v,w→ruedas)

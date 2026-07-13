@@ -3,7 +3,7 @@
 Reemplaza a nav2 + gui_bridge_node del stack ROS2:
   1. El host manda un goal (x, y, yaw en metros, frame del mapa) por el WS de
      navegación (net/nav_server.py) -> Ev.NAV_GOAL.
-  2. Se planifica con A* sobre el mapa de ocupación (controller/planner.py),
+  2. Se planifica con A* sobre el mapa de ocupación (controller/a_star.py),
      el mismo .pgm/.yaml que muestra el host.
   3. Un lazo a CFG.nav.control_rate_hz sigue el camino con pure pursuit usando
      la pose que el ESP32 estima on-board (encoders+IMU) y que core/odometry.py
@@ -28,7 +28,7 @@ from config import CFG, AVAILABLE_MAPS
 from core.bus import Ev, bus
 from core.occupancy_map import load_map
 from core.state import state
-from controller.planner import GridPlanner
+from controller.a_star import AStarPlanner
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def _wrap(a):
 
 class NavController:
     def __init__(self, planner):
-        # type: (GridPlanner) -> None
+        # type: (AStarPlanner) -> None
         self._planner = planner
         self._path = []          # type: List[Tuple[float, float]]
         self._target_idx = 0
@@ -270,15 +270,17 @@ async def run_controller(stop_event):
         await stop_event.wait()
         return
 
-    planner = GridPlanner(
+    planner = AStarPlanner(
         occ,
         occupied_below=CFG.nav.occupied_below,
         inflation_radius_m=CFG.nav.inflation_radius_m,
         center_bias_radius_m=CFG.nav.center_bias_radius_m,
         center_bias_weight=CFG.nav.center_bias_weight,
+        planning_resolution_m=CFG.nav.planning_resolution_m,
     )
-    log.info("Planner listo: mapa '%s' %dx%d @ %.3f m/px",
-             CFG.nav.map_name, occ.width, occ.height, occ.resolution)
+    log.info("Planner listo: mapa '%s' %dx%d @ %.3f m/px -> rejilla %dx%d @ %.3f m/celda",
+             CFG.nav.map_name, occ.width, occ.height, occ.resolution,
+             planner.grid_width, planner.grid_height, planner.grid_resolution)
 
     controller = NavController(planner)
     controller.attach()
