@@ -37,6 +37,11 @@ log = logging.getLogger(__name__)
 _SQRT2 = math.sqrt(2.0)
 _INF = float("inf")
 
+# Detección de esquinas para pivote (ver _pivot_corners):
+_PIVOT_WINDOW = 3          # celdas a cada lado para medir el giro local
+_PIVOT_REGION_RAD = 0.52   # ~30°: la celda pertenece a una zona de giro
+_PIVOT_NET_RAD = 0.79      # ~45°: giro neto que amerita pivotear en el lugar
+
 
 class AStarPlanner:
     def __init__(self, occ, occupied_below=220, inflation_radius_m=0.10,
@@ -203,10 +208,29 @@ class AStarPlanner:
         col, row = self.world_to_cell(x, y)
         return not self._is_free(col, row)
 
-    def segment_clear(self, a_xy, b_xy):
-        # type: (Tuple[float, float], Tuple[float, float]) -> bool
-        """True si el segmento recto entre dos puntos del mundo no cruza pared."""
-        return self._line_free(self.world_to_cell(*a_xy), self.world_to_cell(*b_xy))
+    def clearance(self, x, y):
+        # type: (float, float) -> float
+        """Distancia (m) desde (x,y) mundo a la pared REAL más cercana
+        (no al inflado); -1 si cae fuera del mapa. Para los chequeos de
+        seguridad del controlador: con pasillos donde la banda libre tras
+        inflar mide ~6 cm, abortar apenas la pose toca el inflado hace la
+        navegación frágil; contra la pared real el margen es el físico."""
+        col, row = self.world_to_cell(x, y)
+        if not (0 <= col < self._w and 0 <= row < self._h):
+            return -1.0
+        return self._dist[row * self._w + col]
+
+    def segment_clear(self, a_xy, b_xy, min_clearance_m=None):
+        # type: (Tuple[float, float], Tuple[float, float], Optional[float]) -> bool
+        """True si el segmento recto entre dos puntos del mundo no cruza pared.
+
+        Sin min_clearance_m se chequea contra la rejilla inflada (igual que
+        el A*). Con min_clearance_m se exige esa distancia a la pared REAL
+        en cada celda tocada: más laxo que el inflado, pensado para el
+        chequeo de seguridad del lazo de control (ver clearance())."""
+        a = self.world_to_cell(*a_xy)
+        b = self.world_to_cell(*b_xy)
+        return self._line_free(a, b, min_dist=min_clearance_m)
 
     def _nearest_free(self, col, row, max_radius=8):
         # type: (int, int, int) -> Optional[Tuple[int, int]]
@@ -244,12 +268,103 @@ class AStarPlanner:
         cells = self._astar(start, goal)
         if cells is None:
             return None
+        cells = self._pivot_corners(cells)
         cells = self._shortcut(cells)
         path = [self.cell_to_world(c, r) for c, r in cells]
         # El último waypoint es el goal pedido (no el centro de celda) para
-        # que la tolerancia de llegada se mida contra el clic real del host.
-        path[-1] = (float(goal_xy[0]), float(goal_xy[1]))
+        # que la tolerancia de llegada se mida contra el clic real del host —
+        # pero sólo si el clic cayó en zona transitable; si cayó en pared o
+        # inflado se conserva el centro de la celda libre más cercana (antes
+        # el tramo final llevaba al robot directo contra la pared).
+        if self._is_free(*self.world_to_cell(*goal_xy)):
+            path[-1] = (float(goal_xy[0]), float(goal_xy[1]))
         return path
+
+    # ------------------------------------------------------------
+    # Esquinas con pivote
+    # ------------------------------------------------------------
+    def _pivot_corners(self, cells):
+        # type: (List[Tuple[int, int]]) -> List[Tuple[int, int]]
+        """Reemplaza cada curva cerrada del camino por UN waypoint de pivote
+        en el "bolsillo" de la intersección (la celda con máxima distancia a
+        pared, ver _pocket_cell).
+
+        Motivo: el robot es un cuadrado de 22 cm -> al rotar barre una
+        semidiagonal de 15.6 cm, MÁS que la media holgura del pasillo
+        (15 cm). Girar en arco dentro del pasillo roza inevitablemente la
+        esquina interior aunque el camino tenga la holgura máxima posible
+        (13.5 cm). En el bolsillo de la intersección (~17 cm de holgura) la
+        rotación sí cabe. El controlador detecta estos waypoints por el
+        ángulo del camino y rota en el lugar ahí (pivot_turn_min_rad /
+        corner_capture_m en NavConfig)."""
+        n = len(cells)
+        w = _PIVOT_WINDOW
+        if n < 2 * w + 2:
+            return cells
+
+        def _turn(i):
+            # Giro local: ángulo entre la dirección de llegada y de salida
+            # medido con una ventana de w celdas (suaviza el "escalonado"
+            # diagonal de la rejilla 8-conexa, que no es un giro real).
+            vix = cells[i][0] - cells[i - w][0]
+            viy = cells[i][1] - cells[i - w][1]
+            vox = cells[i + w][0] - cells[i][0]
+            voy = cells[i + w][1] - cells[i][1]
+            return abs(math.atan2(vix * voy - viy * vox, vix * vox + viy * voy))
+
+        regions = []
+        i = w
+        while i < n - w:
+            if _turn(i) > _PIVOT_REGION_RAD:
+                j = i
+                while j + 1 < n - w and _turn(j + 1) > _PIVOT_REGION_RAD:
+                    j += 1
+                # Giro neto de toda la zona (una S corta suma ~0: no pivotear).
+                vix = cells[i][0] - cells[i - w][0]
+                viy = cells[i][1] - cells[i - w][1]
+                vox = cells[min(j + w, n - 1)][0] - cells[j][0]
+                voy = cells[min(j + w, n - 1)][1] - cells[j][1]
+                net = abs(math.atan2(vix * voy - viy * vox, vix * vox + viy * voy))
+                if net >= _PIVOT_NET_RAD:
+                    regions.append((i, j))
+                i = j + 1
+            else:
+                i += 1
+
+        out = list(cells)
+        for s, e in reversed(regions):  # de atrás hacia adelante: índices estables
+            pocket = self._pocket_cell(cells[(s + e) // 2])
+            a, b = cells[s - 1], cells[e + 1]
+            if (pocket != a and pocket != b
+                    and self._line_free(a, pocket) and self._line_free(pocket, b)):
+                out[s:e + 1] = [pocket]
+            # si no hay bolsillo alcanzable en línea recta se conserva el
+            # arco original de A* (mejor curva apretada que atravesar pared)
+        return out
+
+    def _pocket_cell(self, cell, max_steps=4):
+        # type: (Tuple[int, int], int) -> Tuple[int, int]
+        """Sube por el gradiente del campo de distancia hasta un máximo
+        local: el punto con más holgura cerca de la esquina (en una
+        intersección en L queda desplazado en diagonal hacia la esquina
+        interior, donde el barrido de rotación del robot cabe entero)."""
+        col, row = cell
+        w = self._w
+        for _ in range(max_steps):
+            d0 = self._dist[row * w + col]
+            best = None
+            for dc in (-1, 0, 1):
+                for dr in (-1, 0, 1):
+                    if dc == 0 and dr == 0:
+                        continue
+                    nc, nr = col + dc, row + dr
+                    if self._is_free(nc, nr) and self._dist[nr * w + nc] > d0:
+                        d0 = self._dist[nr * w + nc]
+                        best = (nc, nr)
+            if best is None:
+                break
+            col, row = best
+        return (col, row)
 
     def _astar(self, start, goal):
         # type: (Tuple[int, int], Tuple[int, int]) -> Optional[List[Tuple[int, int]]]
@@ -324,17 +439,23 @@ class AStarPlanner:
             i = j
         return out
 
-    def _line_free(self, a, b, max_cost=None):
-        # type: (Tuple[int, int], Tuple[int, int], Optional[float]) -> bool
+    def _line_free(self, a, b, max_cost=None, min_dist=None):
+        # type: (Tuple[int, int], Tuple[int, int], Optional[float], Optional[float]) -> bool
         """Bresenham supercover: todas las celdas tocadas deben estar libres.
 
         Si max_cost no es None, además exige que el gradiente de inflado
         (ver _masks_from_distance) de cada celda tocada no lo supere.
+        Si min_dist no es None, en vez de la rejilla inflada se exige esa
+        distancia (m) a la pared real en cada celda tocada.
         """
         w = self._w
 
         def _ok(col, row):
-            if not self._is_free(col, row):
+            if not (0 <= col < self._w and 0 <= row < self._h):
+                return False
+            if min_dist is not None:
+                return self._dist[row * w + col] >= min_dist
+            if self._blocked[row * w + col]:
                 return False
             if max_cost is not None and self._cost[row * w + col] > max_cost:
                 return False

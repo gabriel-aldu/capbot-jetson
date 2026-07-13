@@ -117,6 +117,23 @@ class NavConfig:
     center_bias_radius_m: float = 0.15
     center_bias_weight: float = 6.0
 
+    # Esquinas con pivote: el planner coloca en cada giro brusco un waypoint
+    # en el "bolsillo" de la intersección (el punto con más holgura, donde el
+    # barrido diagonal de 15.6 cm del chasis de 22x22 sí cabe al rotar). Si
+    # el camino gira más que pivot_turn_min_rad en un waypoint, pure pursuit
+    # se acerca a corner_capture_m de él (en vez del lookahead) y el umbral
+    # de giro en el lugar hace el resto: parar, pivotear, seguir recto.
+    pivot_turn_min_rad: float = 0.9    # ~52°: >45° del escalonado diagonal
+    corner_capture_m: float = 0.03
+
+    # Seguridad del lazo de control, medida contra la pared REAL (no el
+    # inflado; ver AStarPlanner.clearance): abortar sólo si el centro de
+    # rotación queda a menos de abort_clearance_m de una pared (con la caja
+    # de 20 cm de ancho, 0.10 = el costado ya está tocando), y replanificar
+    # sólo si el tramo recto al target pasa a menos de segment_clearance_m.
+    abort_clearance_m: float = 0.10
+    segment_clearance_m: float = 0.11
+
     # Seguimiento de trayectoria (pure pursuit)
     lookahead_m: float = 0.1
     goal_tolerance_m: float = 0.08 * 0.7

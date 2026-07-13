@@ -50,6 +50,7 @@ class NavController:
         # type: (AStarPlanner) -> None
         self._planner = planner
         self._path = []          # type: List[Tuple[float, float]]
+        self._corners = set()    # índices de waypoints de pivote (giro brusco)
         self._target_idx = 0
         self._goal = None        # type: Optional[Tuple[float, float, float]]
         self._phase = _PH_FOLLOW
@@ -90,8 +91,7 @@ class NavController:
             self._status("rejected")
             return
 
-        self._path = path
-        self._target_idx = 0
+        self._set_path(path)
         self._goal = (gx, gy, gyaw)
         self._phase = _PH_FOLLOW
         self._active = True
@@ -142,9 +142,10 @@ class NavController:
             tick += 1
             x, y, yaw = state.pose_x, state.pose_y, state.pose_yaw
 
-            if self._planner.is_blocked(x, y):
-                log.warning("Pose actual sobre celda bloqueada (pared/inflado); "
-                            "abortando navegacion")
+            if self._planner.clearance(x, y) < CFG.nav.abort_clearance_m:
+                log.warning("Pose actual a menos de %.2f m de una pared "
+                            "(o fuera del mapa); abortando navegacion",
+                            CFG.nav.abort_clearance_m)
                 self._finish("aborted")
                 continue
             if self._phase == _PH_FOLLOW and not self._target_segment_clear(x, y):
@@ -191,7 +192,11 @@ class NavController:
         if self._target_idx >= len(self._path):
             return True
         tx, ty = self._path[self._target_idx]
-        return self._planner.segment_clear((x, y), (tx, ty))
+        # Contra la pared REAL (no el inflado): con la banda libre de ~6 cm
+        # que deja el inflado, chequear contra el inflado dispara replans en
+        # cadena ante cualquier desvío chico de la pose.
+        return self._planner.segment_clear((x, y), (tx, ty),
+                                           min_clearance_m=CFG.nav.segment_clearance_m)
 
     def _try_replan(self, x, y):
         # type: (float, float) -> bool
@@ -199,18 +204,45 @@ class NavController:
         path = self._planner.plan((x, y), (gx, gy))
         if not path:
             return False
+        self._set_path(path)
+        return True
+
+    def _set_path(self, path):
+        # type: (List[Tuple[float, float]]) -> None
+        """Fija el camino y marca los waypoints de pivote: donde el camino
+        gira más que pivot_turn_min_rad (esquinas que el planner colocó en
+        el bolsillo de la intersección). En esos waypoints pure pursuit usa
+        corner_capture_m en vez del lookahead: el robot llega hasta el punto
+        y recién ahí el error de rumbo salta ~90° y el umbral de giro en el
+        lugar (_TURN_IN_PLACE_RAD) lo hace pivotear sin avance, en vez de
+        recortar la esquina en arco (el barrido diagonal de 15.6 cm del
+        chasis no cabe en el pasillo de 30 cm)."""
         self._path = path
         self._target_idx = 0
-        return True
+        corners = set()
+        thr = CFG.nav.pivot_turn_min_rad
+        for i in range(1, len(path) - 1):
+            v0x = path[i][0] - path[i - 1][0]
+            v0y = path[i][1] - path[i - 1][1]
+            v1x = path[i + 1][0] - path[i][0]
+            v1y = path[i + 1][1] - path[i][1]
+            turn = abs(math.atan2(v0x * v1y - v0y * v1x, v0x * v1x + v0y * v1y))
+            if turn > thr:
+                corners.add(i)
+        self._corners = corners
 
     def _pure_pursuit(self, x, y, yaw):
         # type: (float, float, float) -> Tuple[float, float]
         # Avanzar el índice de target hasta el primer waypoint fuera del
-        # radio de lookahead (el último nunca se salta).
+        # radio de captura (el último nunca se salta). Los waypoints de
+        # pivote usan corner_capture_m: hay que LLEGAR a la esquina antes
+        # de doblar, no recortarla desde un lookahead antes.
         lookahead = CFG.nav.lookahead_m
+        capture = CFG.nav.corner_capture_m
         while self._target_idx < len(self._path) - 1:
             tx, ty = self._path[self._target_idx]
-            if math.hypot(tx - x, ty - y) > lookahead:
+            reach = capture if self._target_idx in self._corners else lookahead
+            if math.hypot(tx - x, ty - y) > reach:
                 break
             self._target_idx += 1
 
@@ -233,6 +265,7 @@ class NavController:
         # type: (str, bool) -> None
         self._active = False
         self._path = []
+        self._corners = set()
         self._goal = None
         if send_zero:
             self._emit_vel(0.0, 0.0)
