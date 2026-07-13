@@ -96,14 +96,14 @@ class NavConfig:
     initial_yaw: float = 0.0
 
     # Planificación
-    inflation_radius_m: float = 0.1   # radio de inflado de obstáculos
+    inflation_radius_m: float = 0.12   # radio de inflado de obstáculos
     occupied_below: int = 220          # pixel PGM < esto => celda bloqueada (205=unknown)
     # Sesgo hacia el centro: más allá del inflado, las celdas a menos de
     # center_bias_radius_m de una pared pagan un costo extra en A* (decae
     # linealmente a 0 en ese radio), empujando la ruta a pasar por el medio
     # del pasillo en vez de rozar el borde del inflado. 0 = sin sesgo.
     center_bias_radius_m: float = 0.15
-    center_bias_weight: float = 3.0
+    center_bias_weight: float = 2.0
 
     # Seguimiento de trayectoria (pure pursuit)
     lookahead_m: float = 0.15
