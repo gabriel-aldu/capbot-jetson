@@ -118,12 +118,12 @@ class NavConfig:
     center_bias_weight: float = 6.0
 
     # Seguimiento de trayectoria (pure pursuit)
-    lookahead_m: float = 0.15
-    goal_tolerance_m: float = 0.08
-    yaw_tolerance_rad: float = 0.15
+    lookahead_m: float = 0.25
+    goal_tolerance_m: float = 0.08 * 0.7
+    yaw_tolerance_rad: float = 0.15 * 0.7
     control_rate_hz: float = 25.0
     cruise_speed: float = 0.1          # m/s en tramo recto
-    k_heading: float = 2.0             # w = k * error de rumbo
+    k_heading: float = 1.5             # w = k * error de rumbo
 
     # Publicación de pose al host (WS nav)
     pose_publish_hz: float = 5.0
