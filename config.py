@@ -109,7 +109,7 @@ class NavConfig:
     # una pared de 1 px nunca desaparece). Con el maze @ 0.003 m/px, 0.015
     # deja la rejilla en ~101x121 celdas (25x menos que el PGM). Si es <=
     # la resolución nativa del mapa no se submuestrea (p.ej. "small" @ 0.025).
-    planning_resolution_m: float = 0.015
+    planning_resolution_m: float = 0.03
     # Sesgo hacia el centro: más allá del inflado, las celdas a menos de
     # center_bias_radius_m de una pared pagan un costo extra en A* (decae
     # linealmente a 0 en ese radio), empujando la ruta a pasar por el medio
@@ -118,12 +118,12 @@ class NavConfig:
     center_bias_weight: float = 6.0
 
     # Seguimiento de trayectoria (pure pursuit)
-    lookahead_m: float = 0.25
+    lookahead_m: float = 0.1
     goal_tolerance_m: float = 0.08 * 0.7
     yaw_tolerance_rad: float = 0.15 * 0.7
-    control_rate_hz: float = 25.0
+    control_rate_hz: float = 20.0
     cruise_speed: float = 0.1          # m/s en tramo recto
-    k_heading: float = 1.5             # w = k * error de rumbo
+    k_heading: float = 1.3             # w = k * error de rumbo
 
     # Publicación de pose al host (WS nav)
     pose_publish_hz: float = 5.0
