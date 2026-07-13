@@ -274,6 +274,8 @@ async def run_controller(stop_event):
         occ,
         occupied_below=CFG.nav.occupied_below,
         inflation_radius_m=CFG.nav.inflation_radius_m,
+        center_bias_radius_m=CFG.nav.center_bias_radius_m,
+        center_bias_weight=CFG.nav.center_bias_weight,
     )
     log.info("Planner listo: mapa '%s' %dx%d @ %.3f m/px",
              CFG.nav.map_name, occ.width, occ.height, occ.resolution)

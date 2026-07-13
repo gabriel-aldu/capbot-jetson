@@ -5,8 +5,15 @@ Pipeline:
      (cubre ocupado=0 y desconocido=205; libre=254/255).
   2. Los obstáculos se inflan por el radio del robot (nav.inflation_radius_m)
      para poder tratarlo como un punto.
-  3. A* 8-conexo (sin cortar esquinas) sobre la rejilla inflada.
-  4. El camino de celdas se acorta por línea-de-vista (greedy) y se devuelve
+  3. Se calcula un campo de costo por cercanía a paredes (distancia en celdas
+     a la pared/inflado más próxima): las celdas dentro de
+     nav.center_bias_radius_m pagan un costo extra que decae con la
+     distancia. Esto empuja a A* a preferir el centro de los pasillos en vez
+     de rozar el borde exacto del inflado (mismo costo ahí que en el medio
+     si no existiera este sesgo).
+  4. A* 8-conexo (sin cortar esquinas) sobre la rejilla inflada, con el costo
+     de paso ponderado por el campo de cercanía.
+  5. El camino de celdas se acorta por línea-de-vista (greedy) y se devuelve
      como waypoints (x, y) en metros, frame del mapa.
 
 Todo en stdlib (sin numpy) porque los mapas usados son chicos
@@ -17,6 +24,7 @@ import heapq
 import logging
 import math
 
+from collections import deque
 from typing import List, Optional, Tuple
 
 from core.occupancy_map import OccupancyMap
@@ -27,13 +35,19 @@ _SQRT2 = math.sqrt(2.0)
 
 
 class GridPlanner:
-    def __init__(self, occ, occupied_below=220, inflation_radius_m=0.10):
-        # type: (OccupancyMap, int, float) -> None
+    def __init__(self, occ, occupied_below=220, inflation_radius_m=0.10,
+                 center_bias_radius_m=0.0, center_bias_weight=0.0):
+        # type: (OccupancyMap, int, float, float, float) -> None
         self._occ = occ
         self._w = occ.width
         self._h = occ.height
         # blocked[row*w + col] = True si la celda (inflada) no es transitable.
         self._blocked = self._build_blocked(occupied_below, inflation_radius_m)
+        # cost[row*w + col] = costo extra (>=0) por pasar cerca de una pared,
+        # sumado al costo base de cada paso de A*. 0 = sin sesgo (comportamiento
+        # anterior: primer camino más corto, aunque roce el inflado).
+        bias_cells = int(round(center_bias_radius_m / occ.resolution))
+        self._cost = self._build_cost(bias_cells, center_bias_weight)
 
     # ------------------------------------------------------------
     # Construcción de la rejilla
@@ -65,6 +79,47 @@ class GridPlanner:
                     if 0 <= rr < h and 0 <= cc < w:
                         blocked[rr * w + cc] = True
         return blocked
+
+    def _build_cost(self, bias_cells, weight):
+        # type: (int, float) -> List[float]
+        """Costo extra por celda según distancia (BFS, en celdas) a la pared/
+        inflado más cercana. Decae linealmente a 0 en bias_cells; 0 celdas
+        de distancia (encima de una pared) no importa porque esas celdas ya
+        están bloqueadas y A* nunca las visita."""
+        w, h = self._w, self._h
+        if bias_cells <= 0 or weight <= 0:
+            return [0.0] * (w * h)
+
+        dist = [-1] * (w * h)
+        dq = deque()
+        for i, b in enumerate(self._blocked):
+            if b:
+                dist[i] = 0
+                dq.append(i)
+
+        while dq:
+            i = dq.popleft()
+            d = dist[i]
+            if d >= bias_cells:
+                continue
+            row, col = divmod(i, w)
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    rr, cc = row + dr, col + dc
+                    if 0 <= rr < h and 0 <= cc < w:
+                        ni = rr * w + cc
+                        if dist[ni] == -1:
+                            dist[ni] = d + 1
+                            dq.append(ni)
+
+        cost = [0.0] * (w * h)
+        for i, d in enumerate(dist):
+            if 0 <= d < bias_cells:
+                frac = (bias_cells - d) / float(bias_cells)
+                cost[i] = weight * frac * frac
+        return cost
 
     def _is_free(self, col, row):
         # type: (int, int) -> bool
@@ -180,7 +235,12 @@ class GridPlanner:
                     else:
                         step = 1.0
                     neighbor = (nc, nr)
-                    tentative = g + step
+                    # Costo extra por acercarse a una pared (ver _build_cost):
+                    # promedio entre la celda de salida y la de llegada, para
+                    # que A* prefiera rutas por el centro del pasillo.
+                    w = self._w
+                    edge_cost = 0.5 * (self._cost[row * w + col] + self._cost[nr * w + nc])
+                    tentative = g + step * (1.0 + edge_cost)
                     if neighbor not in g_score or tentative < g_score[neighbor]:
                         g_score[neighbor] = tentative
                         came_from[neighbor] = current
@@ -198,15 +258,31 @@ class GridPlanner:
         i = 0
         while i < len(cells) - 1:
             j = len(cells) - 1
-            while j > i + 1 and not self._line_free(cells[i], cells[j]):
+            # max_cost=0.0: el atajo sólo se toma si queda fuera de la zona
+            # de sesgo por cercanía a pared; si no, se conservan los
+            # waypoints intermedios de A* que ya pasan por el centro.
+            while j > i + 1 and not self._line_free(cells[i], cells[j], max_cost=0.0):
                 j -= 1
             out.append(cells[j])
             i = j
         return out
 
-    def _line_free(self, a, b):
-        # type: (Tuple[int, int], Tuple[int, int]) -> bool
-        """Bresenham supercover: todas las celdas tocadas deben estar libres."""
+    def _line_free(self, a, b, max_cost=None):
+        # type: (Tuple[int, int], Tuple[int, int], Optional[float]) -> bool
+        """Bresenham supercover: todas las celdas tocadas deben estar libres.
+
+        Si max_cost no es None, además exige que el costo de cercanía a
+        pared (ver _build_cost) de cada celda tocada no lo supere.
+        """
+        w = self._w
+
+        def _ok(col, row):
+            if not self._is_free(col, row):
+                return False
+            if max_cost is not None and self._cost[row * w + col] > max_cost:
+                return False
+            return True
+
         c0, r0 = a
         c1, r1 = b
         dc = abs(c1 - c0)
@@ -216,7 +292,7 @@ class GridPlanner:
         err = dc - dr
         c, r = c0, r0
         while True:
-            if not self._is_free(c, r):
+            if not _ok(c, r):
                 return False
             if c == c1 and r == r1:
                 return True
@@ -229,5 +305,5 @@ class GridPlanner:
                 r += sr
             # Evitar pasar en diagonal entre dos celdas bloqueadas.
             if e2 > -dr and e2 < dc:
-                if not (self._is_free(c - sc, r) or self._is_free(c, r - sr)):
+                if not (_ok(c - sc, r) or _ok(c, r - sr)):
                     return False
