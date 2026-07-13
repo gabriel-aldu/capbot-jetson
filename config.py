@@ -96,7 +96,7 @@ class NavConfig:
     initial_yaw: float = 0.0
 
     # Planificación
-    inflation_radius_m: float = 0.12   # radio de inflado de obstáculos
+    inflation_radius_m: float = 0.13   # radio de inflado de obstáculos
     occupied_below: int = 220          # pixel PGM < esto => celda bloqueada (205=unknown)
     # Resolución de la rejilla de PLANIFICACIÓN (m/celda). El PGM se
     # submuestrea a esta resolución antes de A* (min-pooling conservador:
@@ -109,10 +109,10 @@ class NavConfig:
     # linealmente a 0 en ese radio), empujando la ruta a pasar por el medio
     # del pasillo en vez de rozar el borde del inflado. 0 = sin sesgo.
     center_bias_radius_m: float = 0.15
-    center_bias_weight: float = 2.0
+    center_bias_weight: float = 10.0
 
     # Seguimiento de trayectoria (pure pursuit)
-    lookahead_m: float = 0.15
+    lookahead_m: float = 0.10
     goal_tolerance_m: float = 0.08
     yaw_tolerance_rad: float = 0.15
     control_rate_hz: float = 20.0
