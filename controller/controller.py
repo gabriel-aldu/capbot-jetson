@@ -37,7 +37,7 @@ _PH_FOLLOW = "follow"   # siguiendo el camino
 _PH_ALIGN = "align"     # en el punto: rotando al yaw final
 
 # Con error de rumbo mayor a esto se rota en el lugar (sin avance).
-_TURN_IN_PLACE_RAD = 1.2
+_TURN_IN_PLACE_RAD = 0.7
 
 
 def _wrap(a):

@@ -123,7 +123,7 @@ class NavConfig:
     yaw_tolerance_rad: float = 0.15 * 0.7
     control_rate_hz: float = 20.0
     cruise_speed: float = 0.1          # m/s en tramo recto
-    k_heading: float = 1.3             # w = k * error de rumbo
+    k_heading: float = 2.0             # w = k * error de rumbo
 
     # Publicación de pose al host (WS nav)
     pose_publish_hz: float = 5.0
