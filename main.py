@@ -83,6 +83,43 @@ def setup_logging(level: str) -> None:
     )
 
 
+def _install_signal_handlers(loop: asyncio.AbstractEventLoop,
+                             stop_event: asyncio.Event) -> None:
+    def _on_signal() -> None:
+        # print() además de log: si algo pisó el handler y este es el
+        # primer intento que sí llega, queremos confirmación aunque el
+        # logging esté redirigido/silencioso.
+        print("\n[jetson_service] Señal de parada recibida, cerrando...", flush=True)
+        log.info("Señal de parada recibida")
+        loop.call_soon_threadsafe(stop_event.set)
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _on_signal)
+        except NotImplementedError:
+            # Windows: add_signal_handler no soportado. Usamos signal.signal.
+            signal.signal(sig, lambda *_: _on_signal())
+
+
+async def _signal_guard(loop: asyncio.AbstractEventLoop,
+                        stop_event: asyncio.Event) -> None:
+    """Reinstala SIGINT/SIGTERM cada segundo mientras el servicio corre.
+
+    En Jetson, nvarguscamerasrc/libargus (ver net/video_pipeline.py) es
+    conocido por resetear la disposición de SIGINT al inicializar la cámara,
+    dejando Ctrl+C sin efecto aunque `_install_signal_handlers` ya se haya
+    llamado antes de que la pipeline arranque. Reinstalar periódicamente
+    recupera el handler en cuanto eso pasa, sin depender de detectar el
+    momento exacto en que otra librería nativa lo pisó.
+    """
+    while not stop_event.is_set():
+        _install_signal_handlers(loop, stop_event)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=1.0)
+        except asyncio.TimeoutError:
+            continue
+
+
 # PY36: `loop` ahora se pasa como argumento explícito. En el original, el código
 #       llamaba a `asyncio.get_running_loop()` dentro de las corrutinas (API de 3.7+).
 #       En 3.6 lo más limpio y seguro es pasar el loop explícitamente y que cada
@@ -108,8 +145,9 @@ async def amain(stop_event: asyncio.Event, loop: asyncio.AbstractEventLoop) -> N
         ("nav",           run_nav_server(stop_event, loop)),
         ("video",         run_video_pipeline(stop_event, loop)),
         ("esp32",         esp32.run(stop_event)),
-        ("host-watchdog", run_host_watchdog()),
+        ("host-watchdog", run_host_watchdog(stop_event)),
         ("controller",    run_controller(stop_event)),
+        ("signal-guard",  _signal_guard(loop, stop_event)),
     ]
     # PY36: `loop.create_task` existe desde 3.4.2, así que es seguro en 3.6.
     tasks = [loop.create_task(coro) for _, coro in task_specs]
@@ -152,16 +190,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     #       Lo pasamos explícitamente por claridad.
     stop_event = asyncio.Event(loop=loop)
 
-    def _on_signal():
-        log.info("Señal de parada recibida")
-        loop.call_soon_threadsafe(stop_event.set)
-
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, _on_signal)
-        except NotImplementedError:
-            # Windows: add_signal_handler no soportado. Usamos signal.signal.
-            signal.signal(sig, lambda *_: _on_signal())
+    _install_signal_handlers(loop, stop_event)
 
     try:
         # PY36: Pasamos el loop a `amain` en vez de obtenerlo dentro con

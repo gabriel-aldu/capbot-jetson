@@ -1,22 +1,18 @@
-"""Pose del robot a partir de la odometría on-board del ESP32.
+"""Pose del robot integrada en la Jetson a partir de los encoders del ESP32.
 
-El ESP32 (lib/Sensors/Odometry.cpp) fusiona encoders + IMU (filtro
-complementario gyro-Z) y manda su propia estimación de pose/velocidad en el
-bloque "odo" de cada telemetría (ver SensorHub::buildPayload): x, y, a (yaw en
-grados), v (m/s), w (yaw rate en grados/s). La Jetson ya NO reintegra desde
-vel_left_cps/vel_right_cps (eso quedó obsoleto y perdía la corrección de la
-IMU); sólo reexpresa esa pose en el frame del mapa.
+El firmware ya NO calcula pose ni odometría on-board: el refactor que le quitó
+IMU/Odometry/ToF (ver lib/Sensors/SensorHub.cpp) dejó la telemetría con sólo
+`u.vel_left_cps`/`u.vel_right_cps` (cuentas/seg de cada rueda) y sin ningún
+bloque "odo". Por eso la integración de pose se hace acá, igual que hace
+`esp32_serial_bridge.py` en el stack ROS: cinemática diferencial a partir de
+las velocidades de rueda, usando `CFG.robot.wheel_radius/wheel_separation/
+wheel_cpr` (deben calzar con `Cfg::WHEEL_CPR` del firmware).
 
-El ESP32 arranca su odometría siempre en (0, 0, 0) (Odometry::reset() en su
-setup()) y nunca se le resetea desde la Jetson. Por eso, al conectar (o tras
-un reset()), esta clase fija como referencia la primera muestra "odo" recibida
-y le aplica una transformación rígida (rotación + traslación) para que esa
-referencia coincida con la pose inicial configurada (config/CLI), y las
-muestras siguientes seguidas de esa misma transformación.
-
-Sin corrección externa la pose deriva con el tiempo; la pose inicial se fija
-por config/CLI y debe corresponder a dónde se coloca físicamente el robot en
-el mapa.
+La pose arranca en la pose inicial configurada (config/CLI) y queda válida
+de inmediato al llamar `attach()`/`reset()` — no hace falta esperar telemetría
+del ESP32 para saber dónde está el robot, porque la posición inicial la fija
+quien lanza `main.py`, no el hardware. Cada telemetría siguiente integra el
+movimiento desde ahí; sin corrección externa la pose deriva con el tiempo.
 
 Publica cada actualización como Ev.POSE y la refleja en `state.pose_*` para
 consumidores síncronos (nav_server, controller).
@@ -26,23 +22,28 @@ import logging
 import math
 import time
 
+from typing import Optional  # PY36: añadido
+
 from config import CFG
 from core.bus import Ev, bus
 from core.state import state
 
 log = logging.getLogger(__name__)
 
+_TWO_PI = 2.0 * math.pi
+
+# Hueco de tiempo entre telemetrías por encima del cual no integramos ese
+# tramo (reconexión del serial, freeze, etc.): un dt grande con una velocidad
+# instantánea produciría un salto de pose irreal.
+_MAX_INTEGRATION_GAP_S = 0.5
+
 
 class Odometry:
     def __init__(self):
-        self._map_x0 = CFG.nav.initial_x
-        self._map_y0 = CFG.nav.initial_y
-        self._map_yaw0 = CFG.nav.initial_yaw
-        # Primera muestra "odo" del ESP32 tras el (re)arranque; sirve de
-        # referencia para la transformación rígida. None = todavía sin fijar.
-        self._ref_fx = None    # type: float
-        self._ref_fy = None    # type: float
-        self._ref_ftheta = None  # type: float
+        self._x = CFG.nav.initial_x
+        self._y = CFG.nav.initial_y
+        self._yaw = CFG.nav.initial_yaw
+        self._last_ts = None  # type: Optional[float]
 
     def attach(self):
         # type: () -> None
@@ -55,64 +56,96 @@ class Odometry:
 
     def reset(self, x, y, yaw):
         # type: (float, float, float) -> None
-        self._map_x0 = float(x)
-        self._map_y0 = float(y)
-        self._map_yaw0 = float(yaw)
-        # La próxima telemetría recibida vuelve a fijar la referencia.
-        self._ref_fx = None
-        self._ref_fy = None
-        self._ref_ftheta = None
-        state.pose_valid = False
+        self._x = float(x)
+        self._y = float(y)
+        self._yaw = float(yaw)
+        # La próxima telemetría vuelve a fijar el reloj de integración, para
+        # no integrar un dt gigante acumulado mientras no llegaba nada.
+        self._last_ts = None
+
+        now = time.time()
+        state.pose_x = self._x
+        state.pose_y = self._y
+        state.pose_yaw = self._yaw
+        state.pose_v = 0.0
+        state.pose_w = 0.0
+        state.pose_stamp = now
+        # Válida de inmediato: la pose inicial la define quien lanza el
+        # servicio, no el ESP32 (que ya no reporta pose propia).
+        state.pose_valid = True
         log.info("Odometría reiniciada a x=%.3f y=%.3f yaw=%.3f", x, y, yaw)
+
+        bus.emit(Ev.POSE, {
+            "x": self._x,
+            "y": self._y,
+            "yaw": self._yaw,
+            "v": 0.0,
+            "w": 0.0,
+            "stamp": now,
+            "valid": True,
+        })
 
     # ------------------------------------------------------------
     def _on_telemetry(self, data):
         # type: (dict) -> None
         if not isinstance(data, dict):
             return
-        odo = data.get("odo")
-        if not isinstance(odo, dict):
+        u = data.get("u")
+        if not isinstance(u, dict):
             return
         try:
-            fx = float(odo["x"])
-            fy = float(odo["y"])
-            ftheta = math.radians(float(odo["a"]))
-            v = float(odo["v"])
-            w = math.radians(float(odo["w"]))
+            cps_left = float(u["vel_left_cps"])
+            cps_right = float(u["vel_right_cps"])
         except (KeyError, TypeError, ValueError):
             return
 
-        if self._ref_fx is None:
-            self._ref_fx = fx
-            self._ref_fy = fy
-            self._ref_ftheta = ftheta
-
-        # Transformación rígida: delta en el frame del ESP32 (desde la
-        # referencia) rotado y trasladado al frame del mapa.
-        dx = fx - self._ref_fx
-        dy = fy - self._ref_fy
-        dtheta = ftheta - self._ref_ftheta
-
-        yaw0 = self._map_yaw0
-        cos0 = math.cos(yaw0)
-        sin0 = math.sin(yaw0)
-        x = self._map_x0 + dx * cos0 - dy * sin0
-        y = self._map_y0 + dx * sin0 + dy * cos0
-        yaw = math.atan2(math.sin(yaw0 + dtheta), math.cos(yaw0 + dtheta))
-
         now = time.time()
-        state.pose_x = x
-        state.pose_y = y
-        state.pose_yaw = yaw
+        if self._last_ts is None:
+            # Primera muestra tras (re)conectar: sólo fija el reloj de
+            # integración, sin mover la pose (dt desconocido).
+            self._last_ts = now
+            return
+        dt = now - self._last_ts
+        self._last_ts = now
+        if dt <= 0.0 or dt > _MAX_INTEGRATION_GAP_S:
+            return
+
+        rb = CFG.robot
+        rad_per_count = _TWO_PI / rb.wheel_cpr
+        v_left = cps_left * rad_per_count * rb.wheel_radius    # m/s
+        v_right = cps_right * rad_per_count * rb.wheel_radius
+
+        v = (v_left + v_right) / 2.0
+        w = (v_right - v_left) / rb.wheel_separation
+
+        # Integración exacta del arco (en vez de Euler simple) para no sesgar
+        # la pose cuando w != 0: equivale a mover v*dt sobre una curva de
+        # curvatura w en vez de una recta.
+        dyaw = w * dt
+        if abs(w) < 1e-6:
+            dx = v * dt * math.cos(self._yaw)
+            dy = v * dt * math.sin(self._yaw)
+        else:
+            r = v / w
+            dx = r * (math.sin(self._yaw + dyaw) - math.sin(self._yaw))
+            dy = -r * (math.cos(self._yaw + dyaw) - math.cos(self._yaw))
+
+        self._x += dx
+        self._y += dy
+        self._yaw = math.atan2(math.sin(self._yaw + dyaw), math.cos(self._yaw + dyaw))
+
+        state.pose_x = self._x
+        state.pose_y = self._y
+        state.pose_yaw = self._yaw
         state.pose_v = v
         state.pose_w = w
         state.pose_stamp = now
         state.pose_valid = True
 
         bus.emit(Ev.POSE, {
-            "x": x,
-            "y": y,
-            "yaw": yaw,
+            "x": self._x,
+            "y": self._y,
+            "yaw": self._yaw,
             "v": v,
             "w": w,
             "stamp": now,

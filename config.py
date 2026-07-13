@@ -72,7 +72,7 @@ class RobotConfig:
     los valores que usaba el stack ROS (esp32_serial_bridge.py)."""
     wheel_radius: float = 0.034      # m
     wheel_separation: float = 0.17   # m (track width)
-    wheel_cpr: float = 898.0         # cuentas/vuelta del encoder (cuadratura 4x)
+    wheel_cpr: float = 910.0         # cuentas/vuelta del encoder (cuadratura 4x) — debe calzar con Cfg::WHEEL_CPR (capbot-ESP32/include/Config.h)
     max_linear_speed: float = 0.1   # m/s, clamp del (v,w) de navegación
     max_angular_speed: float = 1.0   # rad/s
 

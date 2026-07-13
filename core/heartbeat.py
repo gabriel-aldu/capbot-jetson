@@ -24,8 +24,8 @@ log = logging.getLogger(__name__)
 _CHECK_INTERVAL_S = 0.05
 
 
-async def run_host_watchdog() -> None:
-    """Bucle infinito que vigila el heartbeat del host."""
+async def run_host_watchdog(stop_event: asyncio.Event) -> None:
+    """Bucle que vigila el heartbeat del host hasta que se pida parar."""
     # Suscribimos auto-refresh al recibir cualquier comando
     bus.on(Ev.CMD_MOTOR, _touch_host)
     bus.on(Ev.CMD_HEARTBEAT, _touch_host)
@@ -34,7 +34,7 @@ async def run_host_watchdog() -> None:
     timeout_s = CFG.network.host_heartbeat_timeout_ms / 1000.0
     was_online = False
 
-    while True:
+    while not stop_event.is_set():
         try:
             now = time.time()
             elapsed = now - state.host_last_seen if state.host_last_seen else float("inf")
