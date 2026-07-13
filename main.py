@@ -146,7 +146,7 @@ async def amain(stop_event: asyncio.Event, loop: asyncio.AbstractEventLoop) -> N
         ("video",         run_video_pipeline(stop_event, loop)),
         ("esp32",         esp32.run(stop_event)),
         ("host-watchdog", run_host_watchdog(stop_event)),
-        ("controller",    run_controller(stop_event)),
+        ("controller",    run_controller(stop_event, loop)),
         ("signal-guard",  _signal_guard(loop, stop_event)),
     ]
     # PY36: `loop.create_task` existe desde 3.4.2, así que es seguro en 3.6.

@@ -95,18 +95,20 @@ class NavConfig:
     initial_y: float = -0.75
     initial_yaw: float = 0.0
 
-    # Planificación
-    inflation_radius_m: float = 0.12   # radio de inflado de obstáculos
+    # Planificación: A* corre sobre celdas de laberinto (ver
+    # controller/planner.py: MazePlanner), no píxel a píxel -- en el mapa
+    # maze de alta resolución (0.003 m/px) la versión píxel a píxel tardaba
+    # 1-2.5s por goal, suficiente para tirar los WS por ping timeout.
+    # maze_cell_size_m debe aproximar el tamaño real de celda del laberinto
+    # físico (medido: 0.30 m, rejilla de 6x5 en test_map_maze). Si no calza
+    # exacto no rompe nada, sólo deja de coincidir 1:1 con las paredes
+    # reales (las paredes se detectan por muestreo de píxeles, no por
+    # posición fija).
+    maze_cell_size_m: float = 0.3
     occupied_below: int = 220          # pixel PGM < esto => celda bloqueada (205=unknown)
-    # Sesgo hacia el centro: más allá del inflado, las celdas a menos de
-    # center_bias_radius_m de una pared pagan un costo extra en A* (decae
-    # linealmente a 0 en ese radio), empujando la ruta a pasar por el medio
-    # del pasillo en vez de rozar el borde del inflado. 0 = sin sesgo.
-    center_bias_radius_m: float = 0.15
-    center_bias_weight: float = 2.0
 
     # Seguimiento de trayectoria (pure pursuit)
-    lookahead_m: float = 0.15
+    lookahead_m: float = 0.10
     goal_tolerance_m: float = 0.08
     yaw_tolerance_rad: float = 0.15
     control_rate_hz: float = 20.0

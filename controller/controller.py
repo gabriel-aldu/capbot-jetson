@@ -28,7 +28,7 @@ from config import CFG, AVAILABLE_MAPS
 from core.bus import Ev, bus
 from core.occupancy_map import load_map
 from core.state import state
-from controller.planner import GridPlanner
+from controller.planner import MazePlanner
 
 log = logging.getLogger(__name__)
 
@@ -46,15 +46,22 @@ def _wrap(a):
 
 
 class NavController:
-    def __init__(self, planner):
-        # type: (GridPlanner) -> None
+    def __init__(self, planner, loop):
+        # type: (MazePlanner, asyncio.AbstractEventLoop) -> None
         self._planner = planner
+        self._loop = loop
         self._path = []          # type: List[Tuple[float, float]]
         self._target_idx = 0
         self._goal = None        # type: Optional[Tuple[float, float, float]]
         self._phase = _PH_FOLLOW
         self._seq = 0
         self._active = False
+        # Incrementado en cada goal aceptado/cancelado/terminado. plan() corre
+        # en threadpool (no bloquea el loop asyncio: WS ping/pong y heartbeat
+        # del ESP32 siguen andando mientras A* corre); si esto cambió mientras
+        # esperábamos el resultado (cancel, nuevo goal, u otro fin), se
+        # descarta para no pisar un estado más nuevo.
+        self._goal_gen = 0
 
     # ------------------------------------------------------------
     # Eventos
@@ -66,7 +73,7 @@ class NavController:
         bus.on(Ev.STOP_MOTORS, self._on_stop)
         bus.on(Ev.ESP32_OFFLINE, self._on_esp32_offline)
 
-    def _on_goal(self, data):
+    async def _on_goal(self, data):
         # type: (dict) -> None
         try:
             gx = float(data["x"])
@@ -84,7 +91,16 @@ class NavController:
             self._status("rejected")
             return
 
-        path = self._planner.plan((state.pose_x, state.pose_y), (gx, gy))
+        self._goal_gen += 1
+        my_gen = self._goal_gen
+        start = (state.pose_x, state.pose_y)
+        # A* en threadpool: puede tardar segundos en mapas finos y no debe
+        # trancar el loop asyncio (WS ping/pong, heartbeat ESP32).
+        path = await self._loop.run_in_executor(
+            None, self._planner.plan, start, (gx, gy))
+        if my_gen != self._goal_gen:
+            return  # cancelado o reemplazado por otro goal mientras planificaba
+
         if not path:
             log.warning("Goal rechazado: sin ruta a x=%.2f y=%.2f", gx, gy)
             self._status("rejected")
@@ -148,11 +164,25 @@ class NavController:
                 self._finish("aborted")
                 continue
             if self._phase == _PH_FOLLOW and not self._target_segment_clear(x, y):
-                if not self._try_replan(x, y):
+                # El camino ya planeado ahora cruza una pared (deriva de
+                # odometría u obstáculo no previsto): frenar y replanificar
+                # en threadpool, sin bloquear este loop ni el asyncio en
+                # general (WS ping/pong, heartbeat ESP32 siguen andando).
+                self._emit_vel(0.0, 0.0)
+                my_gen = self._goal_gen
+                gx, gy, _ = self._goal
+                path = await self._loop.run_in_executor(
+                    None, self._planner.plan, (x, y), (gx, gy))
+                if my_gen != self._goal_gen:
+                    continue  # goal cancelado/reemplazado mientras replanificaba
+                if not path:
                     log.warning("Camino hacia el target cruza una pared y no hay "
                                 "ruta alternativa; abortando navegacion")
                     self._finish("aborted")
                     continue
+                self._path = path
+                self._target_idx = 0
+                continue  # seguir pure pursuit sobre el nuevo camino en el próximo tick
 
             v, w, remaining = self._step(x, y, yaw)
             if self._active:
@@ -193,16 +223,6 @@ class NavController:
         tx, ty = self._path[self._target_idx]
         return self._planner.segment_clear((x, y), (tx, ty))
 
-    def _try_replan(self, x, y):
-        # type: (float, float) -> bool
-        gx, gy, _ = self._goal
-        path = self._planner.plan((x, y), (gx, gy))
-        if not path:
-            return False
-        self._path = path
-        self._target_idx = 0
-        return True
-
     def _pure_pursuit(self, x, y, yaw):
         # type: (float, float, float) -> Tuple[float, float]
         # Avanzar el índice de target hasta el primer waypoint fuera del
@@ -231,6 +251,7 @@ class NavController:
     # ------------------------------------------------------------
     def _finish(self, result, send_zero=True):
         # type: (str, bool) -> None
+        self._goal_gen += 1  # invalida cualquier plan()/replan() en vuelo
         self._active = False
         self._path = []
         self._goal = None
@@ -253,8 +274,8 @@ class NavController:
         bus.emit(Ev.NAV_STATUS, msg)
 
 
-async def run_controller(stop_event):
-    # type: (asyncio.Event) -> None
+async def run_controller(stop_event, loop):
+    # type: (asyncio.Event, asyncio.AbstractEventLoop) -> None
     """Carga el mapa activo, arma el planificador y corre el lazo de control."""
     entry = AVAILABLE_MAPS.get(CFG.nav.map_name)
     if entry is None:
@@ -270,16 +291,14 @@ async def run_controller(stop_event):
         await stop_event.wait()
         return
 
-    planner = GridPlanner(
+    planner = MazePlanner(
         occ,
+        cell_size_m=CFG.nav.maze_cell_size_m,
         occupied_below=CFG.nav.occupied_below,
-        inflation_radius_m=CFG.nav.inflation_radius_m,
-        center_bias_radius_m=CFG.nav.center_bias_radius_m,
-        center_bias_weight=CFG.nav.center_bias_weight,
     )
     log.info("Planner listo: mapa '%s' %dx%d @ %.3f m/px",
              CFG.nav.map_name, occ.width, occ.height, occ.resolution)
 
-    controller = NavController(planner)
+    controller = NavController(planner, loop)
     controller.attach()
     await controller.run(stop_event)
