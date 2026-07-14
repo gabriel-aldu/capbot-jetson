@@ -105,6 +105,11 @@ class Ev:
     WALL_RESULT = "wall.result"          # dict {ok, action, [reason]}
     WALLS_CHANGED = "walls.changed"      # dict {map, walls, connected, unreachable}
 
+    # Percepción de obstáculos (DNN sobre la cámara CSI; ver perception/ y
+    # controller/obstacle_tracker.py)
+    DETECTIONS = "perception.detections"   # dict {stamp, fps, pose|None, points:[{x,y,conf,clipped,dist_m}]}
+    OBSTACLES_CHANGED = "obstacles.changed"  # dict {map, cells:[[i,j],..]}
+
     # Orden interna: detener motores ya (por watchdog o emergencia)
     STOP_MOTORS = "motors.stop"          # None
 

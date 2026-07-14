@@ -5,12 +5,17 @@ Mismo puerto (8766) y mismo protocolo JSON que el nodo ROS, así el host
 
   Jetson -> GUI: {"type":"pose","x":..,"y":..,"yaw":..,"valid":bool,"stamp":..}
                  {"type":"nav_status","state":"accepted|rejected|active|
-                    succeeded|aborted|canceled","distance_remaining":..}
+                    waiting|succeeded|aborted|canceled","distance_remaining":..}
+                    ("waiting": detenido ante un obstáculo detectado por la
+                     DNN que bloquea toda ruta; se reanuda solo al liberarse)
                  {"type":"map_name","name":"small"}      (al conectar)
                  {"type":"walls","map":"maze","walls":[["v",1,0],..],
                     "connected":bool,"unreachable":int}  (al conectar y tras
                     cada edición; sólo mapas con rejilla editable)
                  {"type":"wall_result","ok":bool,"action":..,["reason":..]}
+                 {"type":"obstacles","map":"maze","cells":[[i,j],..]}
+                    (al conectar y con cada cambio: celdas de 30 cm bloqueadas
+                     por obstáculos de la DNN; ver controller/obstacle_tracker)
   GUI -> Jetson: {"type":"goal","x":..,"y":..,"yaw":..}
                  {"type":"cancel"}
                  {"type":"wall_add","o":"v|h","i":..,"j":..}
@@ -54,6 +59,7 @@ class NavServer:
         bus.on(Ev.NAV_STATUS, self._on_nav_status)
         bus.on(Ev.WALLS_CHANGED, self._on_walls_changed)
         bus.on(Ev.WALL_RESULT, self._on_wall_result)
+        bus.on(Ev.OBSTACLES_CHANGED, self._on_obstacles_changed)
 
     # ------------------------------------------------------------
     # Difusión
@@ -69,6 +75,10 @@ class NavServer:
     def _on_wall_result(self, data):
         # type: (dict) -> None
         self._broadcast_typed("wall_result", data)
+
+    def _on_obstacles_changed(self, data):
+        # type: (dict) -> None
+        self._broadcast_typed("obstacles", data)
 
     def _broadcast_typed(self, mtype, data):
         # type: (str, dict) -> None
@@ -134,6 +144,12 @@ class NavServer:
         if isinstance(state.walls_state, dict):
             msg = {"type": "walls"}
             msg.update(state.walls_state)
+            await self._safe_send(ws, json.dumps(msg))
+        # Celdas bloqueadas por obstáculos de la DNN (si la percepción corre),
+        # para que el host pinte el estado actual al conectar.
+        if isinstance(state.obstacles_state, dict):
+            msg = {"type": "obstacles"}
+            msg.update(state.obstacles_state)
             await self._safe_send(ws, json.dumps(msg))
         try:
             async for msg in ws:

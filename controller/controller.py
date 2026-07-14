@@ -16,6 +16,19 @@ Reemplaza a nav2 + gui_bridge_node del stack ROS2:
 Al aceptar un goal se manda MODE_CMD(1) al ESP32 (AUTONOMOUS_NAV) para que el
 clic en el mapa baste por sí solo; el host puede volver a manual con su switch
 de modo de siempre.
+
+Obstáculos detectados por la DNN (controller/obstacle_tracker.py): el
+controlador mantiene DOS planners:
+  * `_planner` (completo: paredes + celdas de obstáculo) para planificar y
+    para el chequeo de segmento del lazo — así una celda bloqueada dispara
+    replanificación ("replan first") y detiene al robot antes de entrar.
+  * `_base_planner` (sólo paredes) para el chequeo de aborto por holgura
+    (una botella cerca no debe abortar como si fuera una pared) y para
+    decidir si un bloqueo es POR OBSTÁCULO: si el planner completo no
+    encuentra ruta pero el de paredes sí, el robot entra en fase de ESPERA
+    (nav_status "waiting", velocidad 0) en vez de abortar, y reanuda solo
+    cuando el tracker libera la celda (intercambio de planner) — salvo que
+    el host cancele el goal.
 """
 # PY36: sin `from __future__ import annotations`; genéricos desde typing.
 import asyncio
@@ -30,6 +43,7 @@ from core.bus import Ev, bus
 from core.occupancy_map import load_map
 from core.state import state
 from controller.a_star import AStarPlanner
+from controller.obstacle_tracker import ObstacleTracker
 from controller.wall_editor import WallEditor
 
 log = logging.getLogger(__name__)
@@ -37,9 +51,14 @@ log = logging.getLogger(__name__)
 # Fases de un goal activo
 _PH_FOLLOW = "follow"   # siguiendo el camino
 _PH_ALIGN = "align"     # en el punto: rotando al yaw final
+_PH_WAIT = "wait"       # detenido: obstáculo bloquea toda ruta al goal
 
 # Con error de rumbo mayor a esto se rota en el lugar (sin avance).
 _TURN_IN_PLACE_RAD = 0.7
+
+# En fase de espera, reintentar la planificación cada tanto (además del
+# reintento inmediato con cada intercambio de planner del tracker).
+_WAIT_REPLAN_PERIOD_S = 2.0
 
 
 def _wrap(a):
@@ -48,9 +67,13 @@ def _wrap(a):
 
 
 class NavController:
-    def __init__(self, planner):
-        # type: (AStarPlanner) -> None
-        self._planner = planner
+    def __init__(self, planner, has_tracker=False):
+        # type: (AStarPlanner, bool) -> None
+        self._planner = planner        # completo (paredes + obstáculos DNN)
+        self._base_planner = planner   # sólo paredes (seguridad / "¿es obstáculo?")
+        # Con tracker, el planner completo lo entrega set_obstacle_planner();
+        # set_planner() (WallEditor) sólo actualiza el de paredes.
+        self._has_tracker = has_tracker
         self._path = []          # type: List[Tuple[float, float]]
         self._corners = set()    # índices de waypoints de pivote (giro brusco)
         self._target_idx = 0
@@ -89,9 +112,19 @@ class NavController:
 
         path = self._planner.plan((state.pose_x, state.pose_y), (gx, gy))
         if not path:
-            log.warning("Goal rechazado: sin ruta a x=%.2f y=%.2f", gx, gy)
-            self._status("rejected")
-            return
+            # Sin ruta en el planner completo: si con SOLO paredes sí hay
+            # ruta, el bloqueo es por un obstáculo detectado -> se acepta el
+            # goal, se avanza por la ruta de paredes hasta donde se pueda y
+            # el chequeo de segmento del lazo detiene al robot a esperar.
+            if self._base_planner is not self._planner:
+                path = self._base_planner.plan(
+                    (state.pose_x, state.pose_y), (gx, gy))
+            if not path:
+                log.warning("Goal rechazado: sin ruta a x=%.2f y=%.2f", gx, gy)
+                self._status("rejected")
+                return
+            log.info("Ruta al goal bloqueada por obstáculo: el robot se "
+                     "acercará y esperará a que se libere")
 
         self._set_path(path)
         self._goal = (gx, gy, gyaw)
@@ -107,20 +140,42 @@ class NavController:
 
     def set_planner(self, planner):
         # type: (AStarPlanner) -> None
-        """Intercambia el planner (el mapa cambió por edición de paredes,
-        ver controller/wall_editor.py). Si hay un goal activo se replanifica
-        de inmediato: una pared quitada puede abrir una ruta más corta, y una
-        pared nueva sobre el camino actual se esquiva sin esperar a que el
-        chequeo de seguridad del lazo la detecte. Si ya no hay ruta se
-        conserva el camino viejo y el chequeo del lazo aborta al acercarse."""
+        """Intercambia el planner de PAREDES (el mapa cambió por edición de
+        paredes, ver controller/wall_editor.py). Sin tracker de obstáculos es
+        también el planner completo y se replanifica de inmediato: una pared
+        quitada puede abrir una ruta más corta, y una pared nueva sobre el
+        camino actual se esquiva sin esperar a que el chequeo de seguridad
+        del lazo la detecte. Si ya no hay ruta se conserva el camino viejo y
+        el chequeo del lazo aborta al acercarse. CON tracker, el planner
+        completo (paredes + obstáculos) llega enseguida por
+        set_obstacle_planner() — el tracker escucha Ev.WALLS_CHANGED — y la
+        replanificación ocurre ahí."""
+        self._base_planner = planner
+        if self._has_tracker:
+            return
         self._planner = planner
-        if self._active and self._goal is not None and state.pose_valid:
-            if self._try_replan(state.pose_x, state.pose_y):
-                log.info("Replanificado por cambio de paredes (%d waypoints)",
-                         len(self._path))
-            else:
-                log.warning("Sin ruta al goal tras el cambio de paredes; "
-                            "se mantiene el camino anterior bajo vigilancia")
+        self._replan_after_swap("cambio de paredes")
+
+    def set_obstacle_planner(self, planner):
+        # type: (AStarPlanner) -> None
+        """Intercambia el planner COMPLETO (paredes + celdas de obstáculo),
+        entregado por controller/obstacle_tracker.py con cada cambio. Si hay
+        goal activo se replanifica al instante: un obstáculo nuevo sobre el
+        camino se esquiva si hay alternativa ("replan first") y una celda
+        liberada saca al robot de la fase de espera."""
+        self._planner = planner
+        self._replan_after_swap("cambio de obstáculos")
+
+    def _replan_after_swap(self, reason):
+        # type: (str) -> None
+        if not (self._active and self._goal is not None and state.pose_valid):
+            return
+        if self._try_replan(state.pose_x, state.pose_y):
+            log.info("Replanificado por %s (%d waypoints)",
+                     reason, len(self._path))
+        elif self._phase != _PH_WAIT:
+            log.warning("Sin ruta al goal tras %s; se mantiene el camino "
+                        "anterior bajo vigilancia", reason)
 
     def _on_cancel(self, _data):
         # type: (object) -> None
@@ -147,6 +202,7 @@ class NavController:
         # type: (asyncio.Event) -> None
         period = 1.0 / CFG.nav.control_rate_hz
         status_div = max(1, int(CFG.nav.control_rate_hz / 2))  # status a ~2 Hz
+        replan_div = max(1, int(CFG.nav.control_rate_hz * _WAIT_REPLAN_PERIOD_S))
         tick = 0
         while not stop_event.is_set():
             try:
@@ -161,14 +217,31 @@ class NavController:
             tick += 1
             x, y, yaw = state.pose_x, state.pose_y, state.pose_yaw
 
-            if self._planner.clearance(x, y) < CFG.nav.abort_clearance_m:
+            # Holgura contra la pared REAL (planner de paredes: una celda de
+            # obstáculo cerca no debe abortar — para eso está la espera).
+            if self._base_planner.clearance(x, y) < CFG.nav.abort_clearance_m:
                 log.warning("Pose actual a menos de %.2f m de una pared "
                             "(o fuera del mapa); abortando navegacion",
                             CFG.nav.abort_clearance_m)
                 self._finish("aborted")
                 continue
+
+            if self._phase == _PH_WAIT:
+                # Detenido esperando que el obstáculo se retire. La reanudación
+                # normal llega con el intercambio de planner del tracker
+                # (set_obstacle_planner -> _try_replan); este reintento
+                # periódico es sólo un respaldo barato.
+                if tick % replan_div == 0 and self._try_replan(x, y):
+                    continue  # _try_replan ya volvió a FOLLOW y avisó
+                if tick % status_div == 0:
+                    self._emit_vel(0.0, 0.0)
+                    self._status("waiting")
+                continue
+
             if self._phase == _PH_FOLLOW and not self._target_segment_clear(x, y):
                 if not self._try_replan(x, y):
+                    if self._begin_wait(x, y):
+                        continue
                     log.warning("Camino hacia el target cruza una pared y no hay "
                                 "ruta alternativa; abortando navegacion")
                     self._finish("aborted")
@@ -224,6 +297,31 @@ class NavController:
         if not path:
             return False
         self._set_path(path)
+        if self._phase == _PH_WAIT:
+            # El obstáculo se liberó (o una edición de paredes abrió ruta):
+            # reanudar el seguimiento donde quedó.
+            self._phase = _PH_FOLLOW
+            log.info("Ruta disponible de nuevo; reanudando navegación")
+            self._status("active")
+        return True
+
+    def _begin_wait(self, x, y):
+        # type: (float, float) -> bool
+        """Entra en fase de espera si el bloqueo actual es POR OBSTÁCULO:
+        sin ruta en el planner completo pero CON ruta en el de sólo paredes
+        (si tampoco la hay con sólo paredes, el goal es inalcanzable de
+        verdad y el llamador aborta). El robot queda detenido con el goal
+        activo; un cancel del host lo aborta como siempre."""
+        if self._base_planner is self._planner:
+            return False  # sin tracker no hay celdas de obstáculo
+        gx, gy, _ = self._goal
+        if self._base_planner.plan((x, y), (gx, gy)) is None:
+            return False
+        self._phase = _PH_WAIT
+        self._emit_vel(0.0, 0.0)
+        log.info("Obstáculo bloquea toda ruta al goal; esperando a que se "
+                 "retire (cancel del host para abortar)")
+        self._status("waiting")
         return True
 
     def _set_path(self, path):
@@ -338,6 +436,7 @@ async def run_controller(stop_event):
     # construye desde el render paredes->píxeles, no desde el PGM directo, y
     # el WallEditor lo reconstruye/intercambia con cada edición del host.
     editor = None
+    occ_base = occ  # PGM crudo (el ObstacleTracker re-renderiza desde aquí)
     grid = maze_walls.grid_for_map(CFG.nav.map_name)
     if grid is not None:
         # PY36: get_event_loop() dentro de una corrutina devuelve el loop
@@ -352,9 +451,23 @@ async def run_controller(stop_event):
              planner.grid_width, planner.grid_height, planner.grid_resolution,
              " (paredes editables)" if editor else "")
 
-    controller = NavController(planner)
+    # Celdas bloqueadas por la DNN: sólo mapas con rejilla (hoy "maze") y con
+    # la percepción habilitada. El tracker estampa las celdas sobre el render
+    # de paredes y entrega el planner completo vía set_obstacle_planner().
+    tracker = None
+    if editor is not None and CFG.perception.enabled:
+        tracker = ObstacleTracker(occ_base, grid, CFG.nav.map_name,
+                                  _build_planner, asyncio.get_event_loop(),
+                                  editor.walls_snapshot, occ)
+        log.info("Tracker de obstáculos DNN activo (celdas de %.2f m)",
+                 grid.cell_m)
+
+    controller = NavController(planner, has_tracker=tracker is not None)
     controller.attach()
     if editor is not None:
         editor.set_controller(controller)
         editor.attach()
+    if tracker is not None:
+        tracker.set_controller(controller)
+        tracker.attach()
     await controller.run(stop_event)

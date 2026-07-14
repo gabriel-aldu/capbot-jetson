@@ -152,6 +152,64 @@ class NavConfig:
     walls_state_path: str = os.path.join(_ASSETS_DIR, "maze_walls.json")
 
 
+@dataclass
+class PerceptionConfig:
+    """Detección de obstáculos con la DNN (capbot-identification-test).
+
+    La cámara CSI se comparte con el streaming al host mediante un `tee` en
+    la pipeline de GStreamer (net/video_pipeline.py): una rama sigue mandando
+    H.264 al host y otra entrega frames BGR reducidos a un appsink que
+    consume el hilo de inferencia (perception/detector.py). Cada detección
+    se proyecta al piso con el modelo pinhole+plano (perception/ground_plane
+    .py), se reexpresa en el frame del mapa con la pose odométrica y se
+    acumula por celda de 30 cm (controller/obstacle_tracker.py): una celda
+    con objeto se estampa como ocupada en el planner y se difunde al host.
+    """
+    enabled: bool = True
+    # Engine TensorRT (serializado con trtexec/ultralytics para ESTA Jetson;
+    # copiar aquí el bottles_fp16.engine de capbot-identification-test).
+    engine_path: str = os.path.join(_ASSETS_DIR, "bottles_fp16.engine")
+    imgsz: int = 416
+    conf_threshold: float = 0.25
+    iou_threshold: float = 0.50
+
+    # Rama de análisis del tee (resolución reducida para bajar el costo de
+    # nvvidconv/videoconvert; la letterbox del modelo reescala igual).
+    infer_width: int = 640
+    infer_height: int = 360
+    # Techo de inferencias por segundo (el appsink descarta frames viejos;
+    # 5 Hz sobra para marcar celdas y deja GPU para el encoder H.264).
+    infer_max_hz: float = 5.0
+
+    # Geometría de la cámara (misma convención que capbot-identification-test
+    # /test_stream.py, en metros). min_ground: distancia medida de la cámara
+    # al punto de piso visible en el borde INFERIOR de la imagen; con ella se
+    # calibra el pitch y pitch_deg se ignora.
+    cam_height_m: float = 0.09
+    cam_pitch_deg: float = 0.0
+    cam_hfov_deg: float = 62.2
+    cam_min_ground_m: float = 0.29
+    # Posición de la cámara respecto del centro de rotación del robot
+    # (caja 20x17 cm, centro de rotación a 5 cm de la trasera -> borde
+    # frontal a ~0.12 m). lateral: + izquierda en el frame del robot.
+    cam_forward_offset_m: float = 0.12
+    cam_lateral_offset_m: float = 0.0
+
+    # Sólo se confía en detecciones hasta esta distancia al robot (la
+    # estimación por plano de piso se degrada lejos y con cajas recortadas).
+    max_range_m: float = 1.2
+    # Una celda se BLOQUEA tras verse ocupada de forma continua este tiempo
+    # (filtra falsos positivos de un frame).
+    mark_debounce_s: float = 0.5
+    # Una celda bloqueada se LIBERA tras este tiempo continuo sin detecciones
+    # que caigan en ella, sólo mientras la celda está a la vista de la cámara
+    # (dentro del FOV, en rango y con línea de vista libre de paredes).
+    clear_debounce_s: float = 5.0
+    # Margen (grados) restado a cada lado del HFOV para el test "a la vista"
+    # (los bordes del frame recortan cajas y no son confiables).
+    fov_margin_deg: float = 8.0
+
+
 # Mapas disponibles (nombre -> (pgm, yaml)). Copias de capbot-host/assets.
 AVAILABLE_MAPS = {
     "small": (
@@ -174,6 +232,7 @@ class Config:
     video: VideoConfig = field(default_factory=VideoConfig)
     robot: RobotConfig = field(default_factory=RobotConfig)
     nav: NavConfig = field(default_factory=NavConfig)
+    perception: PerceptionConfig = field(default_factory=PerceptionConfig)
 
 
 # Singleton mutable — se sobrescribe desde main.py tras parsear argv

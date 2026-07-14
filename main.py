@@ -32,6 +32,7 @@ from net.nav_server import run_nav_server
 from net.udp_server import run_udp_server
 from net.video_pipeline import run_video_pipeline
 from net.ws_server import run_ws_server
+from perception.detector import run_perception
 
 log = logging.getLogger("jetson_service")
 
@@ -110,6 +111,7 @@ async def amain(stop_event: asyncio.Event, loop: asyncio.AbstractEventLoop) -> N
         ("esp32",         esp32.run(stop_event)),
         ("host-watchdog", run_host_watchdog()),
         ("controller",    run_controller(stop_event)),
+        ("perception",    run_perception(stop_event, loop)),
     ]
     # PY36: `loop.create_task` existe desde 3.4.2, así que es seguro en 3.6.
     tasks = [loop.create_task(coro) for _, coro in task_specs]

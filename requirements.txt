@@ -13,3 +13,10 @@ websockets==9.1
 
 # pyserial no tiene problemas con 3.6.
 pyserial>=3.4,<4.0
+
+# Percepción de obstáculos (perception/): numpy para los frames/postproceso
+# de la DNN. OJO: tensorrt, pycuda, cv2 (OpenCV) y gi (GStreamer) NO van por
+# pip — vienen con JetPack 4.6 / apt en la Jetson. En un PC sin ellos el
+# servicio arranca igual con la percepción deshabilitada.
+# (pip en 3.6 resuelve solo la última compatible: numpy 1.19.5)
+numpy

@@ -68,6 +68,13 @@ class WallEditor:
         """Mapa base con el conjunto de paredes actual aplicado."""
         return self._render(self._walls)
 
+    def walls_snapshot(self):
+        # type: () -> Set[mw.Segment]
+        """Copia del conjunto de paredes actual. Para consumidores que
+        renderizan fuera del loop (controller/obstacle_tracker.py): la copia
+        se toma en el loop y no ve mutaciones de ediciones concurrentes."""
+        return set(self._walls)
+
     def set_controller(self, controller):
         # type: (object) -> None
         self._controller = controller

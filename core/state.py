@@ -31,6 +31,15 @@ class ServiceState:
     # publicado por controller/wall_editor.py; nav_server lo manda al conectar.
     walls_state: Optional[dict] = None
 
+    # Celdas bloqueadas por obstáculos detectados por la DNN ({map, cells}),
+    # publicado por controller/obstacle_tracker.py; nav_server lo manda al
+    # conectar. None = percepción inactiva o mapa sin rejilla.
+    obstacles_state: Optional[dict] = None
+
+    # Diagnóstico de percepción (hilo de inferencia; ver perception/detector.py)
+    perception_state: str = "stopped"   # stopped|running|error
+    perception_fps: float = 0.0
+
     # Contadores para diagnóstico
     cmds_received: int = 0
     cmds_dropped: int = 0   # frames corruptos o versión mala

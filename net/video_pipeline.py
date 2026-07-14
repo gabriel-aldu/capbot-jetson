@@ -3,7 +3,7 @@
 En Jetson Nano (JetPack 4.x) la captura es por `nvarguscamerasrc` y el
 encoder H.264 por hardware es `nvv4l2h264enc`.
 
-Pipeline:
+Pipeline (rama de video):
     nvarguscamerasrc sensor-id=0
       ! video/x-raw(memory:NVMM),width=1280,height=720,framerate=30/1
       ! nvvidconv
@@ -13,6 +13,22 @@ Pipeline:
       ! h264parse config-interval=1
       ! rtph264pay pt=96 config-interval=1 mtu=1400
       ! udpsink host=<HOST> port=5000 sync=false async=false
+
+Con CFG.perception.enabled la cámara se COMPARTE con la DNN de obstáculos
+mediante un `tee` (nvarguscamerasrc sólo admite UN proceso dueño de la CSI):
+la rama de video anterior queda igual y una rama de análisis entrega frames
+BGR reducidos a un appsink que consume perception/detector.py:
+
+    tee name=t
+    t. ! queue ! <rama de video de arriba>
+    t. ! queue max-size-buffers=1 leaky=downstream
+       ! nvvidconv ! video/x-raw,format=BGRx,width=640,height=360
+       ! videoconvert ! video/x-raw,format=BGR
+       ! appsink name=detsink drop=true max-buffers=1 sync=false
+
+En ese modo la pipeline arranca AUNQUE no haya host todavía (sólo con la
+rama de análisis) para que la detección corra siempre; al detectarse el host
+se reconstruye con ambas ramas.
 """
 # PY36: Eliminado `from __future__ import annotations`.
 import asyncio
@@ -31,6 +47,9 @@ except (ImportError, ValueError):  # pragma: no cover
 from config import CFG
 from core.bus import Ev, bus
 from core.state import state
+# Registro del appsink de la rama de análisis (la DNN lo consume desde su
+# hilo). El import es liviano: detector.py protege sus imports pesados.
+from perception.detector import frames as det_frames
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +83,28 @@ def _build_pipeline_str(host_ip: str) -> str:
     #       parámetros calculados (`v.bitrate_kbps * 1000`) y así queda más
     #       claro lo que se inyecta. Es estilo, no obligatorio.
 
-    return src + " ! " + video_branch
+    # Rama de análisis para la DNN (perception/detector.py): frames BGR
+    # reducidos en memoria de sistema. leaky/drop: si la inferencia va lenta
+    # se descartan frames viejos y JAMÁS se atasca la rama del encoder.
+    det_branch = (
+        "queue max-size-buffers=1 leaky=downstream "
+        "! nvvidconv "
+        "! video/x-raw,format=BGRx,width={w},height={h} "
+        "! videoconvert ! video/x-raw,format=BGR "
+        "! appsink name=detsink drop=true max-buffers=1 sync=false"
+    ).format(w=CFG.perception.infer_width, h=CFG.perception.infer_height)
+
+    branches = []
+    if host_ip:
+        branches.append("queue ! " + video_branch)
+    if CFG.perception.enabled:
+        branches.append(det_branch)
+
+    if not CFG.perception.enabled:
+        # Sin percepción: pipeline idéntica a la de siempre (sin tee).
+        return src + " ! " + video_branch
+
+    return src + " ! tee name=t " + " ".join("t. ! " + b for b in branches)
 
 
 class VideoPipeline:
@@ -90,7 +130,7 @@ class VideoPipeline:
             log.error("GStreamer no disponible; pipeline no arranca")
             return
 
-        if not host_ip:
+        if not host_ip and not CFG.perception.enabled:
             log.warning("No hay host_ip todavía; pipeline de video esperará")
             return
 
@@ -120,7 +160,15 @@ class VideoPipeline:
         self._pipeline.set_state(Gst.State.PLAYING)
         self._current_host = host_ip
         state.video_state = "running"
-        bus.emit(Ev.VIDEO_STATE, "running -> {}:{}".format(host_ip, CFG.network.video_port))
+        if host_ip:
+            bus.emit(Ev.VIDEO_STATE, "running -> {}:{}".format(host_ip, CFG.network.video_port))
+        else:
+            bus.emit(Ev.VIDEO_STATE, "running (sólo análisis, sin host)")
+
+        # Publicar el appsink de la rama de análisis para el hilo de la DNN.
+        appsink = self._pipeline.get_by_name("detsink")
+        if appsink is not None:
+            det_frames.set_appsink(appsink)
 
         # PY36: `loop = asyncio.get_running_loop()` no existe en 3.6.
         #       Usamos el loop guardado en __init__.
@@ -129,6 +177,9 @@ class VideoPipeline:
         self._glib_thread = loop.run_in_executor(None, self._glib_loop.run)
 
     async def stop(self) -> None:
+        # Retirar el appsink ANTES de bajar la pipeline: el hilo de la DNN
+        # deja de hacer pull y espera al que publique el siguiente.
+        det_frames.set_appsink(None)
         if self._pipeline:
             self._pipeline.set_state(Gst.State.NULL)
             self._pipeline = None
@@ -172,7 +223,9 @@ async def run_video_pipeline(stop_event: asyncio.Event,
     pipe = VideoPipeline(loop=loop)  # PY36: loop propagado
 
     # Si al arrancar ya tenemos host (por CLI), lanzamos inmediatamente.
-    if CFG.network.host_ip:
+    # Con percepción habilitada se arranca SIEMPRE (aunque no haya host):
+    # la rama de análisis alimenta a la DNN desde el primer momento.
+    if CFG.network.host_ip or CFG.perception.enabled:
         await pipe.start(CFG.network.host_ip)
 
     async def on_host_online(ip: str) -> None:
