@@ -123,12 +123,15 @@ def _project_detections(dets, mapper, frame_w, frame_h, pose):
     points = []
     boxes = []
     for d in dets:
-        x1, y1, x2, y2 = d["box"]
+        # A float nativo YA: las cajas de yolov8_trt son escalares de numpy y
+        # json.dumps no serializa numpy.float32/numpy.bool_ (el payload viaja
+        # al host por el WS de navegación).
+        x1, y1, x2, y2 = (float(v) for v in d["box"])
         # Fondo-centro de la caja = punto de contacto con el piso asumido. Si
         # la caja toca el borde inferior, el contacto quedó fuera de cuadro y
         # la distancia es sólo una cota superior (el objeto está MÁS cerca).
-        clipped = y2 >= frame_h - 3
-        pos = mapper.locate((x1 + x2) / 2.0, float(y2))
+        clipped = bool(y2 >= frame_h - 3)
+        pos = mapper.locate((x1 + x2) / 2.0, y2)
         dist = None if pos is None else math.hypot(pos[0], pos[1])
 
         # Caja normalizada (0..1): independiente de la resolución de la rama
