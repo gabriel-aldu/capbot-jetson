@@ -25,10 +25,12 @@ import math
 from typing import List, Optional, Tuple
 
 from config import CFG, AVAILABLE_MAPS
+from core import maze_walls
 from core.bus import Ev, bus
 from core.occupancy_map import load_map
 from core.state import state
 from controller.a_star import AStarPlanner
+from controller.wall_editor import WallEditor
 
 log = logging.getLogger(__name__)
 
@@ -102,6 +104,23 @@ class NavController:
         # no se movería hasta que el usuario cambie el modo a mano en el host.
         bus.emit(Ev.CMD_MODE, {"mode": 1, "seq": 0})
         self._status("active")
+
+    def set_planner(self, planner):
+        # type: (AStarPlanner) -> None
+        """Intercambia el planner (el mapa cambió por edición de paredes,
+        ver controller/wall_editor.py). Si hay un goal activo se replanifica
+        de inmediato: una pared quitada puede abrir una ruta más corta, y una
+        pared nueva sobre el camino actual se esquiva sin esperar a que el
+        chequeo de seguridad del lazo la detecte. Si ya no hay ruta se
+        conserva el camino viejo y el chequeo del lazo aborta al acercarse."""
+        self._planner = planner
+        if self._active and self._goal is not None and state.pose_valid:
+            if self._try_replan(state.pose_x, state.pose_y):
+                log.info("Replanificado por cambio de paredes (%d waypoints)",
+                         len(self._path))
+            else:
+                log.warning("Sin ruta al goal tras el cambio de paredes; "
+                            "se mantiene el camino anterior bajo vigilancia")
 
     def _on_cancel(self, _data):
         # type: (object) -> None
@@ -286,6 +305,18 @@ class NavController:
         bus.emit(Ev.NAV_STATUS, msg)
 
 
+def _build_planner(occ):
+    # type: (object) -> AStarPlanner
+    return AStarPlanner(
+        occ,
+        occupied_below=CFG.nav.occupied_below,
+        inflation_radius_m=CFG.nav.inflation_radius_m,
+        center_bias_radius_m=CFG.nav.center_bias_radius_m,
+        center_bias_weight=CFG.nav.center_bias_weight,
+        planning_resolution_m=CFG.nav.planning_resolution_m,
+    )
+
+
 async def run_controller(stop_event):
     # type: (asyncio.Event) -> None
     """Carga el mapa activo, arma el planificador y corre el lazo de control."""
@@ -303,18 +334,27 @@ async def run_controller(stop_event):
         await stop_event.wait()
         return
 
-    planner = AStarPlanner(
-        occ,
-        occupied_below=CFG.nav.occupied_below,
-        inflation_radius_m=CFG.nav.inflation_radius_m,
-        center_bias_radius_m=CFG.nav.center_bias_radius_m,
-        center_bias_weight=CFG.nav.center_bias_weight,
-        planning_resolution_m=CFG.nav.planning_resolution_m,
-    )
-    log.info("Planner listo: mapa '%s' %dx%d @ %.3f m/px -> rejilla %dx%d @ %.3f m/celda",
+    # Mapas con rejilla de paredes editables (hoy sólo "maze"): el planner se
+    # construye desde el render paredes->píxeles, no desde el PGM directo, y
+    # el WallEditor lo reconstruye/intercambia con cada edición del host.
+    editor = None
+    grid = maze_walls.grid_for_map(CFG.nav.map_name)
+    if grid is not None:
+        # PY36: get_event_loop() dentro de una corrutina devuelve el loop
+        # activo (main.py hizo set_event_loop antes de arrancar).
+        editor = WallEditor(occ, grid, CFG.nav.map_name, _build_planner,
+                            asyncio.get_event_loop())
+        occ = editor.render_occ()
+
+    planner = _build_planner(occ)
+    log.info("Planner listo: mapa '%s' %dx%d @ %.3f m/px -> rejilla %dx%d @ %.3f m/celda%s",
              CFG.nav.map_name, occ.width, occ.height, occ.resolution,
-             planner.grid_width, planner.grid_height, planner.grid_resolution)
+             planner.grid_width, planner.grid_height, planner.grid_resolution,
+             " (paredes editables)" if editor else "")
 
     controller = NavController(planner)
     controller.attach()
+    if editor is not None:
+        editor.set_controller(controller)
+        editor.attach()
     await controller.run(stop_event)

@@ -145,6 +145,12 @@ class NavConfig:
     # Publicación de pose al host (WS nav)
     pose_publish_hz: float = 5.0
 
+    # Persistencia de la edición de paredes del maze (core/maze_walls.py):
+    # el conjunto de paredes editado se guarda aquí y se reaplica al arrancar.
+    # El PGM original nunca se modifica en disco; borrar este archivo (o usar
+    # "Restaurar paredes originales" en el host) vuelve al laberinto del PGM.
+    walls_state_path: str = os.path.join(_ASSETS_DIR, "maze_walls.json")
+
 
 # Mapas disponibles (nombre -> (pgm, yaml)). Copias de capbot-host/assets.
 AVAILABLE_MAPS = {

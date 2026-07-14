@@ -4,6 +4,7 @@
 #       operador `|`. Las dataclasses requieren `pip install dataclasses` (backport
 #       oficial para 3.6) o Python 3.7+.
 from dataclasses import dataclass
+from typing import Optional
 import time
 
 
@@ -25,6 +26,10 @@ class ServiceState:
     pose_w: float = 0.0        # rad/s
     pose_stamp: float = 0.0    # time.time() de la última muestra
     pose_valid: bool = False   # True tras la primera telemetría del ESP32
+
+    # Estado de paredes del maze editable ({map, walls, connected, unreachable}),
+    # publicado por controller/wall_editor.py; nav_server lo manda al conectar.
+    walls_state: Optional[dict] = None
 
     # Contadores para diagnóstico
     cmds_received: int = 0

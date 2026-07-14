@@ -99,6 +99,12 @@ class Ev:
     NAV_CANCEL = "nav.cancel"            # None
     NAV_STATUS = "nav.status"            # dict {state, [distance_remaining]}
 
+    # Edición de paredes del maze (host -> jetson por WS nav; ver
+    # controller/wall_editor.py y core/maze_walls.py)
+    WALL_EDIT = "wall.edit"              # dict {action:"add"|"remove"|"reset", [o,i,j]}
+    WALL_RESULT = "wall.result"          # dict {ok, action, [reason]}
+    WALLS_CHANGED = "walls.changed"      # dict {map, walls, connected, unreachable}
+
     # Orden interna: detener motores ya (por watchdog o emergencia)
     STOP_MOTORS = "motors.stop"          # None
 

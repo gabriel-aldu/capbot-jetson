@@ -7,8 +7,15 @@ Mismo puerto (8766) y mismo protocolo JSON que el nodo ROS, así el host
                  {"type":"nav_status","state":"accepted|rejected|active|
                     succeeded|aborted|canceled","distance_remaining":..}
                  {"type":"map_name","name":"small"}      (al conectar)
+                 {"type":"walls","map":"maze","walls":[["v",1,0],..],
+                    "connected":bool,"unreachable":int}  (al conectar y tras
+                    cada edición; sólo mapas con rejilla editable)
+                 {"type":"wall_result","ok":bool,"action":..,["reason":..]}
   GUI -> Jetson: {"type":"goal","x":..,"y":..,"yaw":..}
                  {"type":"cancel"}
+                 {"type":"wall_add","o":"v|h","i":..,"j":..}
+                 {"type":"wall_remove","o":"v|h","i":..,"j":..}
+                 {"type":"wall_reset"}
 
 La pose sale de core/odometry.py (state.pose_*, reexpresando en el frame del
 mapa la odometría on-board del ESP32) a nav.pose_publish_hz; los
@@ -45,15 +52,29 @@ class NavServer:
     def attach(self):
         # type: () -> None
         bus.on(Ev.NAV_STATUS, self._on_nav_status)
+        bus.on(Ev.WALLS_CHANGED, self._on_walls_changed)
+        bus.on(Ev.WALL_RESULT, self._on_wall_result)
 
     # ------------------------------------------------------------
     # Difusión
     # ------------------------------------------------------------
     def _on_nav_status(self, data):
         # type: (dict) -> None
+        self._broadcast_typed("nav_status", data)
+
+    def _on_walls_changed(self, data):
+        # type: (dict) -> None
+        self._broadcast_typed("walls", data)
+
+    def _on_wall_result(self, data):
+        # type: (dict) -> None
+        self._broadcast_typed("wall_result", data)
+
+    def _broadcast_typed(self, mtype, data):
+        # type: (str, dict) -> None
         if not isinstance(data, dict):
             return
-        msg = {"type": "nav_status"}
+        msg = {"type": mtype}
         msg.update(data)
         self._broadcast_threadunsafe(json.dumps(msg))
 
@@ -108,6 +129,12 @@ class NavServer:
         log.info("Cliente nav conectado: %s (total=%d)", ws.remote_address, len(self._clients))
         # Anunciar el mapa activo para que el host lo auto-seleccione.
         await self._safe_send(ws, json.dumps({"type": "map_name", "name": CFG.nav.map_name}))
+        # Estado actual de paredes editables (si el mapa activo tiene rejilla),
+        # para que el host redibuje y habilite la edición.
+        if isinstance(state.walls_state, dict):
+            msg = {"type": "walls"}
+            msg.update(state.walls_state)
+            await self._safe_send(ws, json.dumps(msg))
         try:
             async for msg in ws:
                 self._on_message(msg)
@@ -143,6 +170,22 @@ class NavServer:
         elif mtype == "cancel":
             log.info("Cancel del host")
             bus.emit(Ev.NAV_CANCEL, None)
+        elif mtype in ("wall_add", "wall_remove"):
+            try:
+                edit = {
+                    "action": "add" if mtype == "wall_add" else "remove",
+                    "o": str(data["o"]),
+                    "i": int(data["i"]),
+                    "j": int(data["j"]),
+                }
+            except (KeyError, TypeError, ValueError):
+                return
+            log.info("Edición de pared del host: %s (%s,%d,%d)",
+                     edit["action"], edit["o"], edit["i"], edit["j"])
+            bus.emit(Ev.WALL_EDIT, edit)
+        elif mtype == "wall_reset":
+            log.info("Restaurar paredes originales (host)")
+            bus.emit(Ev.WALL_EDIT, {"action": "reset"})
 
 
 async def run_nav_server(stop_event, loop):
