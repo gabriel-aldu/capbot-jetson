@@ -170,7 +170,9 @@ class PerceptionConfig:
     # copiar aquí el bottles_fp16.engine de capbot-identification-test).
     engine_path: str = os.path.join(_ASSETS_DIR, "bottles_fp16.engine")
     imgsz: int = 416
-    conf_threshold: float = 0.25
+    # Confianza mínima de la DNN: bajo esto la detección se descarta por
+    # completo (ni caja en la GUI ni obstáculo en el planner).
+    conf_threshold: float = 0.75
     iou_threshold: float = 0.50
 
     # Rama de análisis del tee (resolución reducida para bajar el costo de
@@ -204,7 +206,7 @@ class PerceptionConfig:
     # Una celda bloqueada se LIBERA tras este tiempo continuo sin detecciones
     # que caigan en ella, sólo mientras la celda está a la vista de la cámara
     # (dentro del FOV, en rango y con línea de vista libre de paredes).
-    clear_debounce_s: float = 5.0
+    clear_debounce_s: float = 2.5
     # Margen (grados) restado a cada lado del HFOV para el test "a la vista"
     # (los bordes del frame recortan cajas y no son confiables).
     fov_margin_deg: float = 8.0

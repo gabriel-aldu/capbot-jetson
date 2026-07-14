@@ -107,7 +107,11 @@ class Ev:
 
     # Percepción de obstáculos (DNN sobre la cámara CSI; ver perception/ y
     # controller/obstacle_tracker.py)
-    DETECTIONS = "perception.detections"   # dict {stamp, fps, pose|None, points:[{x,y,conf,clipped,dist_m}]}
+    # points: proyectados al mapa (para el tracker); boxes: TODAS las cajas
+    # crudas normalizadas 0..1 (para dibujarlas sobre el video en el host).
+    DETECTIONS = "perception.detections"   # dict {stamp, fps, pose|None,
+                                           #   points:[{x,y,cls,conf,clipped,dist_m}],
+                                           #   boxes:[{box:[x1,y1,x2,y2],cls,conf,clipped,dist_m|None}]}
     OBSTACLES_CHANGED = "obstacles.changed"  # dict {map, cells:[[i,j],..]}
 
     # Orden interna: detener motores ya (por watchdog o emergencia)

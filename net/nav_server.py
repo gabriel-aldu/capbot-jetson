@@ -16,6 +16,11 @@ Mismo puerto (8766) y mismo protocolo JSON que el nodo ROS, así el host
                  {"type":"obstacles","map":"maze","cells":[[i,j],..]}
                     (al conectar y con cada cambio: celdas de 30 cm bloqueadas
                      por obstáculos de la DNN; ver controller/obstacle_tracker)
+                 {"type":"detections","stamp":..,"fps":..,
+                    "boxes":[{"box":[x1,y1,x2,y2],"cls":..,"conf":..,
+                              "clipped":bool,"dist_m":..|null},..]}
+                    (a la tasa de inferencia; cajas normalizadas 0..1 sobre el
+                     frame de análisis para dibujarlas encima del video)
   GUI -> Jetson: {"type":"goal","x":..,"y":..,"yaw":..}
                  {"type":"cancel"}
                  {"type":"wall_add","o":"v|h","i":..,"j":..}
@@ -60,6 +65,7 @@ class NavServer:
         bus.on(Ev.WALLS_CHANGED, self._on_walls_changed)
         bus.on(Ev.WALL_RESULT, self._on_wall_result)
         bus.on(Ev.OBSTACLES_CHANGED, self._on_obstacles_changed)
+        bus.on(Ev.DETECTIONS, self._on_detections)
 
     # ------------------------------------------------------------
     # Difusión
@@ -79,6 +85,19 @@ class NavServer:
     def _on_obstacles_changed(self, data):
         # type: (dict) -> None
         self._broadcast_typed("obstacles", data)
+
+    def _on_detections(self, data):
+        # type: (dict) -> None
+        """Cajas crudas de la DNN para la GUI (a la tasa de inferencia, <=
+        infer_max_hz). Sólo las cajas: los puntos del mapa y la pose del
+        payload interno no le sirven al host y engordarían el mensaje."""
+        if not self._clients or not isinstance(data, dict):
+            return
+        self._broadcast_typed("detections", {
+            "stamp": data.get("stamp"),
+            "fps": data.get("fps"),
+            "boxes": data.get("boxes", []),
+        })
 
     def _broadcast_typed(self, mtype, data):
         # type: (str, dict) -> None

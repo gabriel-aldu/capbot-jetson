@@ -108,11 +108,20 @@ def _pull_frame(appsink):
         buf.unmap(mapinfo)
 
 
-def _project_detections(dets, mapper, frame_h, pose):
-    # type: (list, GroundPlaneMapper, int, Optional[tuple]) -> list
-    """Detecciones -> puntos en el frame del mapa (si hay pose válida)."""
+def _project_detections(dets, mapper, frame_w, frame_h, pose):
+    # type: (list, GroundPlaneMapper, int, int, Optional[tuple]) -> tuple
+    """Detecciones -> (points, boxes).
+
+    points: puntos en el frame del mapa (si hay pose válida y la detección
+      proyecta al piso dentro de max_range_m); los consume
+      controller/obstacle_tracker.py.
+    boxes: TODAS las detecciones crudas para la GUI del host (caja
+      normalizada 0..1 sobre el frame de análisis, clase, confianza y
+      distancia si se pudo estimar), incluso las que no proyectan a un punto
+      del mapa: el host las dibuja sobre el video."""
     p = CFG.perception
     points = []
+    boxes = []
     for d in dets:
         x1, y1, x2, y2 = d["box"]
         # Fondo-centro de la caja = punto de contacto con el piso asumido. Si
@@ -120,14 +129,22 @@ def _project_detections(dets, mapper, frame_h, pose):
         # la distancia es sólo una cota superior (el objeto está MÁS cerca).
         clipped = y2 >= frame_h - 3
         pos = mapper.locate((x1 + x2) / 2.0, float(y2))
-        if pos is None:
+        dist = None if pos is None else math.hypot(pos[0], pos[1])
+
+        # Caja normalizada (0..1): independiente de la resolución de la rama
+        # de análisis; el host la escala a su frame de video (mismo aspecto).
+        boxes.append({
+            "box": [round(x1 / frame_w, 4), round(y1 / frame_h, 4),
+                    round(x2 / frame_w, 4), round(y2 / frame_h, 4)],
+            "cls": int(d["cls"]),
+            "conf": round(float(d["conf"]), 3),
+            "clipped": clipped,
+            "dist_m": None if dist is None else round(dist, 3),
+        })
+
+        if pos is None or dist > p.max_range_m or pose is None:
             continue
         fwd, lat = pos
-        dist = math.hypot(fwd, lat)
-        if dist > p.max_range_m:
-            continue
-        if pose is None:
-            continue
         px, py, pyaw = pose
         # Frame del robot: x adelante, y izquierda. `lat` es + derecha.
         xr = p.cam_forward_offset_m + fwd
@@ -141,7 +158,7 @@ def _project_detections(dets, mapper, frame_h, pose):
             "clipped": clipped,
             "dist_m": round(dist, 3),
         })
-    return points
+    return points, boxes
 
 
 def _perception_worker(thread_stop, loop):
@@ -206,12 +223,15 @@ def _perception_worker(thread_stop, loop):
             if state.pose_valid:
                 pose = (state.pose_x, state.pose_y, state.pose_yaw)
 
+            points, boxes = _project_detections(
+                dets, mapper, frame.shape[1], frame.shape[0], pose)
             payload = {
                 "stamp": t0,
                 "fps": round(fps, 1),
                 "pose": None if pose is None else
                         {"x": pose[0], "y": pose[1], "yaw": pose[2]},
-                "points": _project_detections(dets, mapper, frame.shape[0], pose),
+                "points": points,
+                "boxes": boxes,
             }
             loop.call_soon_threadsafe(bus.emit, Ev.DETECTIONS, payload)
 
